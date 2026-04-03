@@ -7,7 +7,7 @@ Vedere traccia A4
 3) Comunicazione tramite GRPC.
 4) AWS per inizializzare i container (possibile scelta: serverless sempre gestita da AWS (Lambda, DynamoDB, API Gateway) oppure insrastructure as a service). Usare Amazon Elastic Container Service e Fargate.
 5) Dataset: Amazon S3.
-6) Per il logging AWS Cloudwatch
+6) Per il logging AWS Cloudwatch.
 
 # Modello:
 Il modello deve essere leggero. Da scegliere tra:
