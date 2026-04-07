@@ -2,7 +2,7 @@
 Vedere traccia A4
 
 # STRUTTURA:
-1) Servise Registry fatto in go.
+1) Service Registry fatto in go.
 2) Tutto il resto in python(pytorch).
 3) Comunicazione tramite GRPC.
 4) AWS per inizializzare i container (possibile scelta: serverless sempre gestita da AWS (Lambda, DynamoDB, API Gateway) oppure insrastructure as a service). Usare Amazon Elastic Container Service e Fargate.
