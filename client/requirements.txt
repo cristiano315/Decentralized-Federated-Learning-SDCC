@@ -1,0 +1,14 @@
+# Machine Learning
+torch
+torchvision
+
+# Communication
+grpcio
+grpcio-tools
+protobuf
+
+# AWS
+boto3
+
+# Utilities
+numpy
