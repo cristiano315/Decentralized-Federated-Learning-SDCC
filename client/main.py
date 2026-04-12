@@ -2,6 +2,7 @@ import grpc
 
 # Import generated gRPC code
 from rpc_calls import RegistryClient
+from rpc_calls import FederatedNodeServicer
 import federated_pb2
 import federated_pb2_grpc
 
