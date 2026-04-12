@@ -8,40 +8,82 @@ option go_package = "./federated";
 // ===============================================================
 // SERVICE REGISTRY
 // ===============================================================
+
 service RegistryService {
     // Register to the service registry
     rpc RegisterNode (NodeInfo) returns (RegisterResponse);
     // Discover other nodes in the network
     rpc DiscoverNodes (DiscoverRequest) returns (DiscoverResponse);
 }
+
 // ===============================================================
 // CLIENTS COMMUNICATION
 // ===============================================================
+
+service FederatedNode {
+    // A client sends local weights to other clients (Gossip/P2P)
+    rpc SendWeights (WeightPayload) returns (Ack);
+}
 
 // ===============================================================
 // CENTRAL SERVER
 // ===============================================================
 
+service FederatedServer {
+    // A client sends local weights to the central server for aggregation
+    rpc SendLocalModel (WeightPayload) returns (Ack);
+    
+    // A client requests the updated global model from the server
+    rpc GetGlobalModel (GlobalModelRequest) returns (WeightPayload);
+}
+
 // ===============================================================
 // MESSAGES
 // ===============================================================
+
 // Node information for registration and discovery
 message NodeInfo {
     string node_id = 1; // Unique identifier for the node
     string ip_address = 2; // IP address of the node
     int32 port = 3; // Port number for communication
 }
+
 // Response for registration
 message RegisterResponse {
     bool success = 1; // Indicates if registration was successful
     string message = 2; // Additional information about the registration
 }
+
 // Request for discovering nodes
 message DiscoverRequest {
     string node_id = 1; // Unique identifier for the requesting node
     int32 request_count = 2; // Number of nodes required
 }
+
 // Response for discovering nodes
 message DiscoverResponse {
     repeated NodeInfo nodes = 1; // List of discovered nodes
+}
+
+// PyTorch weights payload for sending model updates
+message WeightPayload {
+    string sender_id = 1;
+    int32 round_number = 2; // Current training round, to be used in case one is behind
+    
+    // Serialize state_dict() as a byte flow
+    bytes model_weights = 3; 
+    
+    // To be used for fed avg, to know how many samples were used to compute the weights
+    int32 num_samples = 4; 
+}
+
+// Simple acknowledgment message for communication
+message Ack {
+    bool success = 1;
+    string message = 2;
+}
+
+// Request for the global model from the central server
+message GlobalModelRequest {
+    string requester_id = 1;
 }
