@@ -3,7 +3,7 @@
 import grpc
 import federated_pb2
 import federated_pb2_grpc
-from utils import deserialize_weights
+from utils import load_weights_from_bytes
 
 # =====================================================================
 # REGISTRY CALLS
@@ -74,7 +74,7 @@ class FederatedNodeServicer(federated_pb2_grpc.FederatedNodeServicer):
         Triggered when another node calls this RPC.
         """
         # Convert incoming bytes to PyTorch state_dict immediately
-        state_dict = deserialize_weights(request.model_weights)
+        state_dict = load_weights_from_bytes(request.model_weights)
         
         # Store for the aggregation phase
         self.received_weights.append({
