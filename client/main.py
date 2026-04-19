@@ -119,6 +119,7 @@ def main():
                     num_samples=my_samples
                 )
                 send_weights_to_peer(peer['ip'], peer['port'], payload)
+                print(f"sent {len(payload_bytes)} bytes") #fix
 
             # D. Wait for Incoming Weights
             print("[Wait] Waiting to receive weights from peers...")
