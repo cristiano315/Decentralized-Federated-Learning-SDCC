@@ -10,3 +10,5 @@
 - [ ] Aggiungere valutazione performance
 - [ ] Implementazione modello
 - [ ] Creazione immagini per container (una per client decentralizzato, una per client centralizzato, una per service registry go, una per server coordinatore centrale)
+- [ ] Test per scalabilitá
+- [ ] Aggiungere tolleranza ai guasti
