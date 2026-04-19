@@ -47,7 +47,7 @@ class RegistryClient:
                     node_id=self.my_id,
                     request_count=node_request_count
                 )
-                response = stub.Discover(request)
+                response = stub.DiscoverNodes(request)
                 
                 # Convert gRPC repeated field to a standard Python list
                 peers = [{"id": p.node_id, "ip": p.ip_address, "port": p.port} for p in response.peers]
@@ -90,6 +90,7 @@ def send_weights_to_peer(peer_ip: str, peer_port: int, payload: federated_pb2.We
     """
     Client-side gossip function: Sends local weights to a specific peer.
     """
+    print(f"[RPC] Sending weights to peer at {peer_ip}:{peer_port}...")
     peer_address = f"{peer_ip}:{peer_port}"
     try:
         with grpc.insecure_channel(peer_address) as channel:
