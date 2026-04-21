@@ -12,6 +12,8 @@ import (
 	"google.golang.org/grpc"
 
 	pb "federate-registry/federated"
+
+	utils "federate-registry/utils"
 )
 
 // =====================================================================
@@ -23,10 +25,10 @@ type registryServer struct {
 	// Embedding this is required by gRPC for forward compatibility
 	pb.UnimplementedRegistryServiceServer
 
-	// RWMutex ensures thread-safe access to the map when multiple 
+	// RWMutex ensures thread-safe access to the map when multiple
 	// clients register or discover concurrently.
-	mu    sync.RWMutex
-	
+	mu sync.RWMutex
+
 	// Map to store active nodes. Key: node_id, Value: NodeInfo
 	nodes map[string]*pb.NodeInfo
 }
@@ -45,6 +47,10 @@ func (s *registryServer) RegisterNode(ctx context.Context, req *pb.NodeInfo) (*p
 	s.nodes[req.NodeId] = req
 
 	//call aws dynamodb to store node
+	err := utils.AddNode(req)
+	if err != nil {
+		log.Fatalf("Error adding node, %v", err)
+	}
 
 	log.Printf("[REGISTER] Node joined: %s at %s:%d\n", req.NodeId, req.IpAddress, req.Port)
 
