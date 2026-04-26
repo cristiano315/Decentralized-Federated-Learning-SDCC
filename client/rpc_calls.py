@@ -3,7 +3,7 @@
 import grpc
 import federated_pb2
 import federated_pb2_grpc
-from utils import deserialize_weights
+from utils import load_weights_from_bytes
 
 # =====================================================================
 # REGISTRY CALLS
@@ -47,7 +47,7 @@ class RegistryClient:
                     node_id=self.my_id,
                     request_count=node_request_count
                 )
-                response = stub.Discover(request)
+                response = stub.DiscoverNodes(request)
                 
                 # Convert gRPC repeated field to a standard Python list
                 peers = [{"id": p.node_id, "ip": p.ip_address, "port": p.port} for p in response.peers]
@@ -55,6 +55,32 @@ class RegistryClient:
         except grpc.RpcError as e:
             print(f"[RPC Error] Discovery failed: {e.details()}")
             return []
+        
+    def ping(self, request, context):
+        """
+        RPC method to respond to ping requests from the registry.
+        """
+        if request.node_id == self.my_id:
+            return federated_pb2.Ack(success=True, message="Node is alive")
+        
+    def unregister_node(self, my_ip: str, my_port: int) -> bool:
+        """
+        Unregisters this node with the central Go Service Registry.
+        """
+        try:
+            with grpc.insecure_channel(self.registry_address) as channel:
+                stub = federated_pb2_grpc.RegistryServiceStub(channel)
+                payload = federated_pb2.NodeInfo(
+                    node_id=self.my_id,
+                    ip_address=my_ip,
+                    port=my_port
+                )
+                response = stub.UnregisterNode(payload)
+                print(f"[RPC] Unregistration success: {response.message}")
+                return response.success
+        except grpc.RpcError as e:
+            print(f"[RPC Error] Failed to unregister: {e.details()}")
+            return False
 
 # =====================================================================
 # P2P GOSSIP CALLS
@@ -74,7 +100,7 @@ class FederatedNodeServicer(federated_pb2_grpc.FederatedNodeServicer):
         Triggered when another node calls this RPC.
         """
         # Convert incoming bytes to PyTorch state_dict immediately
-        state_dict = deserialize_weights(request.model_weights)
+        state_dict = load_weights_from_bytes(request.model_weights)
         
         # Store for the aggregation phase
         self.received_weights.append({
@@ -90,6 +116,7 @@ def send_weights_to_peer(peer_ip: str, peer_port: int, payload: federated_pb2.We
     """
     Client-side gossip function: Sends local weights to a specific peer.
     """
+    print(f"[RPC] Sending weights to peer at {peer_ip}:{peer_port}...")
     peer_address = f"{peer_ip}:{peer_port}"
     try:
         with grpc.insecure_channel(peer_address) as channel:

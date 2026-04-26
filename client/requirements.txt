@@ -7,8 +7,5 @@ grpcio
 grpcio-tools
 protobuf
 
-# AWS
-boto3
-
 # Utilities
 numpy
