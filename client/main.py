@@ -1,3 +1,5 @@
+#NEED TO DECIDE IF WE WANT TO KEEP THE CONTAINER ACTIVE AFTER FINISHING OR NOT.
+
 import grpc
 from concurrent import futures
 import time

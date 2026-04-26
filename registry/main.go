@@ -69,7 +69,7 @@ func (s *registryServer) Discover(ctx context.Context, req *pb.DiscoverRequest) 
 	var peerList []*pb.NodeInfo
 	requiredPeers := int(req.RequestCount)
 
-	// Check if there are enough registered nodes
+	// Check if there are enough registered nodes, if not, create them
 	if requiredPeers > len(s.nodes) {
 		// Check if there are enough nodes in DynamoDB
 		dynamoNodes := 20 //CHANGE WITH DYNAMODB CALL
@@ -80,7 +80,6 @@ func (s *registryServer) Discover(ctx context.Context, req *pb.DiscoverRequest) 
 			// REMEMBER TO PING THEM USING THE PING RPC TO CHECK IF THEY ARE ALIVE BEFORE RETURNING THEM
 		}
 	}
-	
 	
 	// Iterate over all registered nodes
 	for _, node := range s.nodes {
@@ -106,7 +105,7 @@ func (s *registryServer) UnregisterNode(ctx context.Context, req *pb.NodeInfo) (
 	// Remove the node from the in-memory map
 	delete(s.nodes, req.NodeId)
 
-	// Remove the node from dynamoDB
+	// Remove the node from dynamoDB and destroy it. NOT NECESSARY TO DESTROY IT IF NOT LEFT ON WAIT.
 
 	log.Printf("[UNREGISTER] Node left: %s at %s:%d\n", req.NodeId, req.IpAddress, req.Port)
 
