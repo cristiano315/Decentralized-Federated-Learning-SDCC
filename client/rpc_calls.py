@@ -55,6 +55,32 @@ class RegistryClient:
         except grpc.RpcError as e:
             print(f"[RPC Error] Discovery failed: {e.details()}")
             return []
+        
+    def ping(self, request, context):
+        """
+        RPC method to respond to ping requests from the registry.
+        """
+        if request.node_id == self.my_id:
+            return federated_pb2.Ack(success=True, message="Node is alive")
+        
+    def unregister_node(self, my_ip: str, my_port: int) -> bool:
+        """
+        Unregisters this node with the central Go Service Registry.
+        """
+        try:
+            with grpc.insecure_channel(self.registry_address) as channel:
+                stub = federated_pb2_grpc.RegistryServiceStub(channel)
+                payload = federated_pb2.NodeInfo(
+                    node_id=self.my_id,
+                    ip_address=my_ip,
+                    port=my_port
+                )
+                response = stub.UnregisterNode(payload)
+                print(f"[RPC] Unregistration success: {response.message}")
+                return response.success
+        except grpc.RpcError as e:
+            print(f"[RPC Error] Failed to unregister: {e.details()}")
+            return False
 
 # =====================================================================
 # P2P GOSSIP CALLS

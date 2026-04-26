@@ -1,3 +1,5 @@
+#NEED TO DECIDE IF WE WANT TO KEEP THE CONTAINER ACTIVE AFTER FINISHING OR NOT.
+
 import grpc
 from concurrent import futures
 import time
@@ -148,6 +150,8 @@ def main():
         # --- 5. Graceful Shutdown ---
         print("[Shutdown] Stopping background gRPC server...")
         server.stop(grace=0)
+        # Unregister from the registry
+        registry_client.unregister_node(MY_IP, MY_PORT)
         print("Done.")
 
     print("TRAINING HAS BEEN COMPLETED.")

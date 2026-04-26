@@ -67,7 +67,20 @@ func (s *registryServer) Discover(ctx context.Context, req *pb.DiscoverRequest) 
 	defer s.mu.RUnlock()
 
 	var peerList []*pb.NodeInfo
+	requiredPeers := int(req.RequestCount)
 
+	// Check if there are enough registered nodes, if not, create them
+	if requiredPeers > len(s.nodes) {
+		// Check if there are enough nodes in DynamoDB
+		dynamoNodes := 20 //CHANGE WITH DYNAMODB CALL
+		if dynamoNodes < requiredPeers { // Not enough nodes in DynamoDB either
+			// RAISE REQUIRED NODES
+		} else {
+			// GET REQUIRED NODES FROM DYNAMODB, ADD THEM TO THE LIST AND RETURN THEM
+			// REMEMBER TO PING THEM USING THE PING RPC TO CHECK IF THEY ARE ALIVE BEFORE RETURNING THEM
+		}
+	}
+	
 	// Iterate over all registered nodes
 	for _, node := range s.nodes {
 		// Do not include the node that made the request in the returned peer list
@@ -80,6 +93,25 @@ func (s *registryServer) Discover(ctx context.Context, req *pb.DiscoverRequest) 
 
 	return &pb.DiscoverResponse{
 		Nodes: peerList,
+	}, nil
+}
+
+// UnregisterNode allows nodes to gracefully leave the registry.
+func (s *registryServer) UnregisterNode(ctx context.Context, req *pb.NodeInfo) (*pb.Ack, error) {
+	// Lock the map for writing to prevent race conditions
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Remove the node from the in-memory map
+	delete(s.nodes, req.NodeId)
+
+	// Remove the node from dynamoDB and destroy it. NOT NECESSARY TO DESTROY IT IF NOT LEFT ON WAIT.
+
+	log.Printf("[UNREGISTER] Node left: %s at %s:%d\n", req.NodeId, req.IpAddress, req.Port)
+
+	return &pb.Ack{
+		Success: true,
+		Message: fmt.Sprintf("Node %s successfully unregistered.", req.NodeId),
 	}, nil
 }
 
