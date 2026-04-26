@@ -14,6 +14,8 @@ service RegistryService {
     rpc RegisterNode (NodeInfo) returns (RegisterResponse);
     // Discover other nodes in the network
     rpc DiscoverNodes (DiscoverRequest) returns (DiscoverResponse);
+    // Unregister from the service registry
+    rpc UnregisterNode (NodeInfo) returns (Ack);
 }
 
 // ===============================================================
@@ -23,6 +25,8 @@ service RegistryService {
 service FederatedNode {
     // A client sends local weights to other clients (Gossip/P2P)
     rpc SendWeights (WeightPayload) returns (Ack);
+    // A registry node can ping other nodes to check if they are alive
+    rpc Ping (NodeInfo) returns (Ack);
 }
 
 // ===============================================================
