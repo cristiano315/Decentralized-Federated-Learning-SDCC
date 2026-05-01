@@ -2,24 +2,22 @@ package utils
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/ecs"
+	"github.com/aws/aws-sdk-go-v2/service/ecs/types"
 
 	pb "federate-registry/federated"
 )
 
-/*
-type Node struct {
-	node_id    string `dynamodbav:"node_id"`
-	ip_address string `dynamodbav:"ip_address"`
-	port       int    `dynamodbav:"port"`
-}
-*/
+//NOT TESTED YET
 
 func AddNode(node *pb.NodeInfo) error {
 	// Using the SDK's default configuration, load additional config
@@ -27,7 +25,7 @@ func AddNode(node *pb.NodeInfo) error {
 	// credentials, and shared configuration files
 	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithRegion("us-east-1"))
 	if err != nil {
-		log.Fatalf("unable to load SDK config, %v", err)
+		return err
 	}
 
 	// Using the Config value, create the DynamoDB client
@@ -45,62 +43,121 @@ func AddNode(node *pb.NodeInfo) error {
 	return err
 }
 
-/*
-func GetUser(ctx context.Context, client *dynamodb.Client, name string) (*User, error) {
-	key, err := attributevalue.MarshalMap(map[string]string{
-		"Name": "TestGo",
-		"Id":   "0",
-	})
+func RemoveNode(nodeId string) error {
+	// Using the SDK's default configuration, load additional config
+	// and credentials values from the environment variables, shared
+	// credentials, and shared configuration files
+	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithRegion("us-east-1"))
 	if err != nil {
-		log.Fatalf("failed to marshal key: %v", err)
+		return err
 	}
 
-	output, err := client.GetItem(ctx, &dynamodb.GetItemInput{
-		TableName: aws.String("serviceRegistry"),
-		Key:       key,
+	// Using the Config value, create the DynamoDB client
+	ddb_client := dynamodb.NewFromConfig(cfg)
+
+	key, err := attributevalue.MarshalMap(map[string]string{
+		"node_id": nodeId,
 	})
-	if err != nil {
-		log.Fatalf("failed to get item: %v", err)
+
+	// Define the DeleteItem input
+	input := &dynamodb.DeleteItemInput{
+		TableName: aws.String("Nodes"),
+		Key:       key,
 	}
-	if output.Item == nil {
-		fmt.Println("No item found with that ID")
+
+	// Execute the request
+	_, err = ddb_client.DeleteItem(context.TODO(), input)
+	return err
+}
+
+/*
+func NodeCount() (int, error) {
+	// Using the SDK's default configuration, load additional config
+	// and credentials values from the environment variables, shared
+	// credentials, and shared configuration files
+	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithRegion("us-east-1"))
+	if err != nil {
+		return 0, err
+	}
+
+	// Using the Config value, create the DynamoDB client
+	ddb_client := dynamodb.NewFromConfig(cfg)
+
+	var count int = 0
+
+	// TODO: Implement
+
+	return count, err
+}
+*/
+
+// TODO: Add filter?
+func FetchActiveNodes() ([]*pb.NodeInfo, error) {
+	// Using the SDK's default configuration, load additional config
+	// and credentials values from the environment variables, shared
+	// credentials, and shared configuration files
+	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithRegion("us-east-1"))
+	if err != nil {
 		return nil, err
 	}
 
-	var user User
-	err = attributevalue.UnmarshalMap(output.Item, &user)
-	if err != nil {
-		log.Fatalf("failed to unmarshal item: %v", err)
-	}
-	return &user, err
-}
+	// Using the Config value, create the DynamoDB client
+	ddb_client := dynamodb.NewFromConfig(cfg)
 
-func ListAllServices(ctx context.Context, client *ecs.Client, cluster string) {
-	// 1. Initialize the paginator
-	paginator := ecs.NewListServicesPaginator(client, &ecs.ListServicesInput{
-		Cluster: aws.String(cluster),
+	var items []*pb.NodeInfo
+
+	// Create the paginator
+	paginator := dynamodb.NewScanPaginator(ddb_client, &dynamodb.ScanInput{
+		TableName: aws.String("Nodes"),
 	})
 
-	fmt.Println("Services in cluster:")
-
-	// 2. Iterate through all pages
+	// Iterate through pages
 	for paginator.HasMorePages() {
-		page, err := paginator.NextPage(ctx)
+		page, err := paginator.NextPage(context.TODO())
 		if err != nil {
-			panic(err)
+			fmt.Printf("Failed to retrive page  %v\n", err)
 		}
 
-		for _, serviceArn := range page.ServiceArns {
-			fmt.Printf(" - %s\n", serviceArn)
+		for _, itemMap := range page.Items {
+			var client *pb.NodeInfo
+
+			// Unmarshal a single item
+			err := attributevalue.UnmarshalMap(itemMap, &client)
+			if err != nil {
+				fmt.Printf("Failed to unmarshal: %v\n", err)
+			}
+
+			// TODO: Ping Container
+			if err != nil {
+				err := RemoveNode(client.NodeId)
+				if err != nil {
+					fmt.Printf("Failed to stop %s: %v\n", client.NodeId, err)
+				}
+			} else {
+				items = append(items, client)
+			}
 		}
 	}
+
+	return items, err
 }
 
-func ExecuteTask(ctx context.Context, client *ecs.Client, cluster string, taskDef string, ammount int32) (*ecs.RunTaskOutput, error) {
+func LaunchTask(task string, ammount int32) error {
+	// Using the SDK's default configuration, load additional config
+	// and credentials values from the environment variables, shared
+	// credentials, and shared configuration files
+	cfg, err := config.LoadDefaultConfig(context.TODO())
+	if err != nil {
+		return err
+	}
 
+	// Using the Config value, create the ECS client
+	client := ecs.NewFromConfig(cfg)
+
+	// Define the RunTask input
 	input := &ecs.RunTaskInput{
-		Cluster:        aws.String(cluster),
-		TaskDefinition: aws.String(taskDef),
+		Cluster:        aws.String("clients"),
+		TaskDefinition: aws.String(task),
 		LaunchType:     types.LaunchTypeFargate,
 		Count:          aws.Int32(ammount),
 		NetworkConfiguration: &types.NetworkConfiguration{
@@ -112,78 +169,112 @@ func ExecuteTask(ctx context.Context, client *ecs.Client, cluster string, taskDe
 		},
 	}
 
-	output, err := client.RunTask(ctx, input)
+	// Execute the request
+	output, err := client.RunTask(context.TODO(), input)
 	if err != nil {
-		log.Fatalf("failed to run task: %v", err)
+		return err
 	}
 
 	for _, task := range output.Tasks {
 		log.Printf("Task started! ARN: %s", *task.TaskArn)
 	}
 
-	return output, err
+	return err
 }
 
-func main() {
+func DestroyTask(task string) error {
 	// Using the SDK's default configuration, load additional config
 	// and credentials values from the environment variables, shared
 	// credentials, and shared configuration files
 	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithRegion("us-east-1"))
 	if err != nil {
-		log.Fatalf("unable to load SDK config, %v", err)
-	}
-
-	// Using the Config value, create the DynamoDB client
-	ddb_client := dynamodb.NewFromConfig(cfg)
-
-	// Build the request with its input parameters
-	resp, err := ddb_client.ListTables(context.TODO(), &dynamodb.ListTablesInput{
-		Limit: aws.Int32(5),
-	})
-	if err != nil {
-		log.Fatalf("failed to list tables, %v", err)
-	}
-
-	fmt.Println("Tables:")
-	for _, tableName := range resp.TableNames {
-		fmt.Println(tableName)
-	}
-
-	newUser := User{
-		Name:   "TestGo",
-		Id:     "0",
-		Adress: "00.0.0.00",
-	}
-
-	fmt.Printf("Adding: %s...\n", newUser.Name)
-	err = AddUser(context.TODO(), ddb_client, newUser)
-	if err != nil {
-		log.Fatalf("failed to add user: %v", err)
-	}
-
-	fmt.Println("Retrieving user...")
-	retrievedUser, err := GetUser(context.TODO(), ddb_client, "TestGo")
-	if err != nil {
-		log.Fatalf("failed to get user: %v", err)
-	}
-
-	if retrievedUser != nil {
-		fmt.Printf("Found User: %+v\n", retrievedUser)
-	} else {
-		fmt.Println("User not found.")
+		return err
 	}
 
 	// Using the Config value, create the ECS client
 	ecs_client := ecs.NewFromConfig(cfg)
 
-	ListAllServices(context.TODO(), ecs_client, "clients")
-
-	output, err := ExecuteTask(context.TODO(), ecs_client, "clients", "test_client", 3)
-	if output != nil {
-		fmt.Printf("Output: %+v\n", output)
-	} else {
-		fmt.Println("Error while getting output.")
+	// Define the StopTask input
+	input := &ecs.StopTaskInput{
+		Cluster: aws.String("clients"),
+		Task:    aws.String(task),
+		Reason:  aws.String("Manually stopped via Go SDK"),
 	}
 
+	// Execute the request
+	_, err = ecs_client.StopTask(context.TODO(), input)
+	return err
 }
-*/
+
+func ScaleService(ammount int32) error {
+	// Using the SDK's default configuration, load additional config
+	// and credentials values from the environment variables, shared
+	// credentials, and shared configuration files
+	cfg, err := config.LoadDefaultConfig(context.TODO())
+	if err != nil {
+		return err
+	}
+
+	// Using the Config value, create the ECS client
+	ecs_client := ecs.NewFromConfig(cfg)
+
+	// Define the UpdateService input
+	input := &ecs.UpdateServiceInput{
+		Cluster:      aws.String("clients"),
+		Service:      aws.String("test_client-service"),
+		DesiredCount: aws.Int32(ammount),
+	}
+
+	// Execute the request
+	_, err = ecs_client.UpdateService(context.TODO(), input)
+	if err != nil {
+		return err
+	}
+
+	// Initialize the Waiter (15 seconds by default)
+	waiter := ecs.NewServicesStableWaiter(ecs_client)
+
+	// Define max waiting time
+	maxWaitTime := 2 * time.Minute
+
+	err = waiter.Wait(context.TODO(), &ecs.DescribeServicesInput{
+		Cluster:  aws.String("clients"),
+		Services: []string{"test_client-service"},
+	}, maxWaitTime)
+	return err
+}
+
+func KillAllTasks() error {
+	// Using the SDK's default configuration, load additional config
+	// and credentials values from the environment variables, shared
+	// credentials, and shared configuration files
+	cfg, err := config.LoadDefaultConfig(context.TODO())
+	if err != nil {
+		return err
+	}
+
+	// Using the Config value, create the ECS client
+	ecs_client := ecs.NewFromConfig(cfg)
+
+	// Get all Task ARNs
+	listOutput, err := ecs_client.ListTasks(context.TODO(), &ecs.ListTasksInput{
+		Cluster:     aws.String("clients"),
+		ServiceName: aws.String("test_client-service"),
+	})
+	if err != nil {
+		return err
+	}
+
+	for _, taskArn := range listOutput.TaskArns {
+		_, err := ecs_client.StopTask(context.TODO(), &ecs.StopTaskInput{
+			Cluster: aws.String("clients"),
+			Task:    aws.String(taskArn),
+			Reason:  aws.String("Mass termination triggered by Go SDK"),
+		})
+		if err != nil {
+			fmt.Printf("Failed to stop %s: %v\n", taskArn, err)
+		}
+	}
+
+	return err
+}

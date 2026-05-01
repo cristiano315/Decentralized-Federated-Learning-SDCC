@@ -10,6 +10,9 @@ from rpc_calls import FederatedNodeServicer
 import federated_pb2
 import federated_pb2_grpc
 
+from .model import SentimentPyTorch
+from .aggregator import apply_fedavg
+
 def start_grpc_server(port: int) -> tuple:
     """
     Initializes and starts the background gRPC server.
@@ -51,6 +54,7 @@ def main():
 
     
     #1 Prepare model
+    global_model = None
 
     # TO IMPLEMENT
     
@@ -103,12 +107,16 @@ def main():
             # A. Local Training
             print("[Train] Training model on local dataset...")
             # model.train_local(...) TO IMPLEMENT
+            model, my_samples = SentimentPyTorch.train_local()
             # my_samples = ...
-            time.sleep(2) # Simulating training time
+            # B. Serialize Weights
+            # Now 'model' contains the trained PyTorch object from SentimentPyTorch.train_local()
+            # You would typically extract the state_dict here
+            state_dict = model.state_dict()
             
             # B. Serialize Weights
             # payload_bytes = serialize_weights(model)
-            payload_bytes = b"dummy_bytes_for_testing" # Placeholder
+            payload_bytes = serialize_weights(model) # Placeholder
             my_samples = 100
             
             # C. Gossip: Send weights to peers
@@ -139,7 +147,8 @@ def main():
             
             # E. Aggregation
             print("[Aggregate] Running FedAvg...")
-            # apply_fedavg(model, servicer.received_weights, my_samples) TO IMPLEMENT
+            
+            global_model = apply_fedavg(model, servicer.received_weights, my_samples) #TO IMPLEMENT
             
             # F. Clear Buffer for the next round
             servicer.received_weights.clear()
