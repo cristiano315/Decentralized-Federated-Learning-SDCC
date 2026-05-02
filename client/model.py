@@ -15,6 +15,8 @@ from nltk.corpus import stopwords
 #from sklearn.tree import DecisionTreeClassifier
 import copy
 from sklearn.model_selection import train_test_split
+import subprocess
+import os
 
 # testing
 '''
@@ -37,7 +39,9 @@ from sklearn.svm import LinearSVC
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from embeddings import PretrainedEmbeddings
 
+'''
 def load_glove_weights(filename, word_to_id, embed_dim):
     print(f"Parsing GloVe vectors from {filename}...")
     # Initialize with random weights or zeros for UNK words
@@ -53,22 +57,22 @@ def load_glove_weights(filename, word_to_id, embed_dim):
                 weights[word_to_id[word], :] = torch.tensor(vector)
                 
     return weights
+'''
 
 class SentimentPyTorch(nn.Module):
-    def __init__(self, vocab_size, embed_dim, num_class, pretrained_weights=None):
+    def __init__(self, vocab_size, embed_dim, num_class, word_to_id, embedding_file_path=None):
         super(SentimentPyTorch, self).__init__()
         
         # 1. Use the highly optimized EmbeddingBag
-        if pretrained_weights is not None:
-            print("Initializing EmbeddingBag with GloVe weights...")
+        if embedding_file_path is not None:
+            pretrained = PretrainedEmbeddings(embedding_file_path, word_to_id, embed_dim)
             # freeze=False means the model can still tweak the GloVe weights during training
             self.embedding = nn.EmbeddingBag.from_pretrained(
-                pretrained_weights, 
+                pretrained.embed.weight, 
                 mode='mean', 
                 freeze=False
             )
         else:
-            print("Initializing random EmbeddingBag...")
             self.embedding = nn.EmbeddingBag(vocab_size, embed_dim, mode='mean', sparse=False)
             
         self.fc = nn.Linear(embed_dim, num_class)
@@ -207,9 +211,15 @@ class SentimentPyTorch(nn.Module):
         EMBED_DIM = 50 # we are using glove 50d
         NUM_CLASS = 2 # 0: Negative, 1: Positive
         #weights tensor
-        glove_tensor = load_glove_weights('glove.6B.50d.txt', word_to_ix, EMBED_DIM)
+        GLOVE_PATH = 'glove.6B.50d.txt'
+        if not os.path.isfile(GLOVE_PATH):
+            commands = ["wget \"https://www.dropbox.com/s/lc3yjhmovq7nyp5/glove6b50dtxt.zip?dl=1\" -O glove6b50dtxt.zip", "unzip -o glove6b50dtxt.zip", "rm glove6b50dtxt.zip" ]
+            for command in commands:
+                subprocess.run(command, shell=True, executable="/bin/bash")
+        
+        # glove_tensor = load_glove_weights(GLOVE_PATH, word_to_ix, EMBED_DIM)
 
-        model = SentimentPyTorch(VOCAB_SIZE, EMBED_DIM, NUM_CLASS, pretrained_weights=glove_tensor).to(device)
+        model = SentimentPyTorch(VOCAB_SIZE, EMBED_DIM, NUM_CLASS, word_to_ix, embedding_file_path=GLOVE_PATH).to(device)
         criterion = nn.CrossEntropyLoss()
         optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
 
