@@ -37,6 +37,9 @@ def main():
     # Configuration: get from AWS Parameter Store or environment variables
     # Set client ID, port, number of rounds and max number of peers to gossip with
     # Dummy valuse TO CHANGE:
+
+    # Inject whit ECS as ambient variables OR use AWS parameter store (boto3)
+
     MY_ID = "client-1"
     MY_IP = "127.0.0.1"
     MY_PORT = 50051

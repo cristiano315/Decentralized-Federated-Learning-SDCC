@@ -2,7 +2,7 @@
 PROTO_FILE = federated.proto
 CLIENT_DIR = ../client
 SERVER_DIR = ../server
-REGISTRY_DIR = ../registry
+REGISTRY_DIR = ../registry/src
 
 all: go python
 
