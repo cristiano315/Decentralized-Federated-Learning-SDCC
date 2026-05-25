@@ -1,6 +1,6 @@
 # === VARIABLES ===
 PROTO_FILE = federated.proto
-CLIENT_DIR = ../client
+CLIENT_DIR = ../client/src
 SERVER_DIR = ../server
 REGISTRY_DIR = ../registry/src
 
@@ -13,9 +13,12 @@ go:
 	@echo "Go compilation completed."
 
 # === PYTHON TARGET ===
-python:
+python-client:
 	@echo "Compiling for Python (Client and Server)..."
 	python -m grpc_tools.protoc -I. --python_out=$(CLIENT_DIR) --grpc_python_out=$(CLIENT_DIR) $(PROTO_FILE)
+	@echo "Python compilation completed."
+python-server:
+	@echo "Compiling for Python (Client and Server)..."
 	python -m grpc_tools.protoc -I. --python_out=$(SERVER_DIR) --grpc_python_out=$(SERVER_DIR) $(PROTO_FILE)
 	@echo "Python compilation completed."
 
@@ -23,7 +26,7 @@ python:
 # Clean up old files
 clean:
 	@echo "Removing old generated files..."
-	rm -f $(CLIENT_DIR)/*_pb2*.py
-	rm -f $(SERVER_DIR)/*_pb2*.py
+	rm -f $(CLIENT_DIR)/_pb2.py
+	rm -f $(SERVER_DIR)/_pb2.py
 	rm -f $(REGISTRY_DIR)/*.pb.go
 	@echo "Cleanup completed."

@@ -1,6 +1,7 @@
 # Machine Learning
 torch
 torchvision
+scikit-learn
 
 # Communication
 grpcio
@@ -9,3 +10,6 @@ protobuf
 
 # Utilities
 numpy
+matplotlib
+seaborn
+nltk

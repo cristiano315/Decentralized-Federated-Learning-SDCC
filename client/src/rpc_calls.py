@@ -1,8 +1,8 @@
 #File for grpc calls implementation
 
 import grpc
-import federated_pb2
-import federated_pb2_grpc
+import federated_pb2 as federated_pb2
+import federated_pb2_grpc as federated_pb2_grpc
 from utils import load_weights_from_bytes
 
 # =====================================================================

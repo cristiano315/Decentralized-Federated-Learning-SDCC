@@ -120,6 +120,9 @@ func (s *registryServer) UnregisterNode(ctx context.Context, req *pb.NodeInfo) (
 // =====================================================================
 
 func main() {
+
+	fmt.Printf("Hello AWS")
+
 	// 1. Define the port the Go server will listen on
 	port := ":8080"
 	lis, err := net.Listen("tcp", port)
