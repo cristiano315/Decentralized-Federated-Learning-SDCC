@@ -13,9 +13,12 @@ go:
 	@echo "Go compilation completed."
 
 # === PYTHON TARGET ===
-python:
+python-client:
 	@echo "Compiling for Python (Client and Server)..."
 	python -m grpc_tools.protoc -I. --python_out=$(CLIENT_DIR) --grpc_python_out=$(CLIENT_DIR) $(PROTO_FILE)
+	@echo "Python compilation completed."
+python-server:
+	@echo "Compiling for Python (Client and Server)..."
 	python -m grpc_tools.protoc -I. --python_out=$(SERVER_DIR) --grpc_python_out=$(SERVER_DIR) $(PROTO_FILE)
 	@echo "Python compilation completed."
 
