@@ -7,11 +7,11 @@ import time
 # Import generated gRPC code
 from rpc_calls import RegistryClient, send_weights_to_peer
 from rpc_calls import FederatedNodeServicer
-import federated_pb2
-import federated_pb2_grpc
+import federated_pb2 as federated_pb2
+import federated_pb2_grpc as federated_pb2_grpc
 
-from .model import SentimentPyTorch
-from .aggregator import apply_fedavg
+from model import SentimentPyTorch
+from aggregator import apply_fedavg
 
 def start_grpc_server(port: int) -> tuple:
     """
@@ -119,7 +119,7 @@ def main():
             
             # B. Serialize Weights
             # payload_bytes = serialize_weights(model)
-            payload_bytes = serialize_weights(model) # Placeholder
+            payload_bytes = b"dummy_bytes_for_testing" # Placeholder
             my_samples = 100
             
             # C. Gossip: Send weights to peers

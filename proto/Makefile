@@ -1,6 +1,6 @@
 # === VARIABLES ===
 PROTO_FILE = federated.proto
-CLIENT_DIR = ../client
+CLIENT_DIR = ../client/src
 SERVER_DIR = ../server
 REGISTRY_DIR = ../registry/src
 
@@ -26,7 +26,7 @@ python-server:
 # Clean up old files
 clean:
 	@echo "Removing old generated files..."
-	rm -f $(CLIENT_DIR)/*_pb2*.py
-	rm -f $(SERVER_DIR)/*_pb2*.py
+	rm -f $(CLIENT_DIR)/_pb2.py
+	rm -f $(SERVER_DIR)/_pb2.py
 	rm -f $(REGISTRY_DIR)/*.pb.go
 	@echo "Cleanup completed."
