@@ -7,11 +7,11 @@ import time
 # Import generated gRPC code
 from rpc_calls import RegistryClient, send_weights_to_peer
 from rpc_calls import FederatedNodeServicer
-import federated_pb2
-import federated_pb2_grpc
+import federated_pb2 as federated_pb2
+import federated_pb2_grpc as federated_pb2_grpc
 
-from .model import SentimentPyTorch
-from .aggregator import apply_fedavg
+from model import SentimentPyTorch
+from aggregator import apply_fedavg
 
 from .utils import get_weights_as_bytes
 
@@ -44,6 +44,9 @@ def main():
     # Configuration: get from AWS Parameter Store or environment variables
     # Set client ID, port, number of rounds and max number of peers to gossip with
     # Dummy valuse TO CHANGE:
+
+    # Inject whit ECS as ambient variables OR use AWS parameter store (boto3)
+
     MY_ID = "client-1"
     MY_IP = "127.0.0.1"
     MY_PORT = 50051
@@ -140,8 +143,15 @@ def main():
             print("[Serialize] Converting model weights to bytes...")
             payload_bytes = get_weights_as_bytes(global_model)
             
+<<<<<<< HEAD:client/main.py
             # Note: We remove `my_samples = 100` because `my_samples` was 
             # already correctly returned by `SentimentPyTorch.train_local()`
+=======
+            # B. Serialize Weights
+            # payload_bytes = serialize_weights(model)
+            payload_bytes = b"dummy_bytes_for_testing" # Placeholder
+            my_samples = 100
+>>>>>>> c39551a23b159f46cda3f51685a852c66b6c0dae:client/src/main.py
             
             # C. Gossip: Send weights to peers
             for peer in peers:

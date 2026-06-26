@@ -72,7 +72,7 @@ func (s *registryServer) Discover(ctx context.Context, req *pb.DiscoverRequest) 
 	// Check if there are enough registered nodes, if not, create them
 	if requiredPeers > len(s.nodes) {
 		// Check if there are enough nodes in DynamoDB
-		dynamoNodes := 20 //CHANGE WITH DYNAMODB CALL
+		dynamoNodes := 20                //CHANGE WITH DYNAMODB CALL
 		if dynamoNodes < requiredPeers { // Not enough nodes in DynamoDB either
 			// RAISE REQUIRED NODES
 		} else {
@@ -80,7 +80,7 @@ func (s *registryServer) Discover(ctx context.Context, req *pb.DiscoverRequest) 
 			// REMEMBER TO PING THEM USING THE PING RPC TO CHECK IF THEY ARE ALIVE BEFORE RETURNING THEM
 		}
 	}
-	
+
 	// Iterate over all registered nodes
 	for _, node := range s.nodes {
 		// Do not include the node that made the request in the returned peer list
@@ -120,6 +120,9 @@ func (s *registryServer) UnregisterNode(ctx context.Context, req *pb.NodeInfo) (
 // =====================================================================
 
 func main() {
+
+	fmt.Printf("Hello AWS")
+
 	// 1. Define the port the Go server will listen on
 	port := ":8080"
 	lis, err := net.Listen("tcp", port)
