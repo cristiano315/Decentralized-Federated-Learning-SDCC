@@ -13,6 +13,10 @@ import federated_pb2_grpc
 from .model import SentimentPyTorch
 from .aggregator import apply_fedavg
 
+from .utils import get_weights_as_bytes
+
+import torch
+
 def start_grpc_server(port: int) -> tuple:
     """
     Initializes and starts the background gRPC server.
@@ -52,9 +56,22 @@ def main():
     
     print("Client is running.")
 
-    
+    #0 prepare data
+    file_path = "./all_data_niid_05_keep_3_train_9.json"
+    X_train, Off_train, Y_train, X_val, Off_val, Y_val, word_to_ix, glove_path = SentimentPyTorch.prepare_dataset(file_path)
+
     #1 Prepare model
-    global_model = None
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"[Init] Initializing global model on {device}...")
+    
+    global_model = SentimentPyTorch(
+        vocab_size=len(word_to_ix),
+        embed_dim=50,          # Matches our GloVe 50d dataset
+        num_class=2,           # Assuming binary classification (Positive/Negative)
+        word_to_id=word_to_ix,
+        embedding_file_path=glove_path
+    )
+    global_model.to(device)
 
     # TO IMPLEMENT
     
@@ -94,9 +111,7 @@ def main():
     
     print(f"Found {len(peers)} peers ready for gossip.")
     
-    #5 Prepare data
-
-    # TO IMPLEMENT
+        
     
     #6 Training loop
 
@@ -107,17 +122,26 @@ def main():
             # A. Local Training
             print("[Train] Training model on local dataset...")
             # model.train_local(...) TO IMPLEMENT
-            model, my_samples = SentimentPyTorch.train_local()
+            
+            # Pass the global_model and the tensors we prepared earlier!
+            global_model, my_samples = SentimentPyTorch.train_local(
+                model=global_model, 
+                X_train=X_train, 
+                Off_train=Off_train, 
+                Y_train=Y_train, 
+                X_val=X_val, 
+                Off_val=Off_val, 
+                Y_val=Y_val, 
+                device=device
+            )
             # my_samples = ...
             # B. Serialize Weights
-            # Now 'model' contains the trained PyTorch object from SentimentPyTorch.train_local()
-            # You would typically extract the state_dict here
-            state_dict = model.state_dict()
+            # Use the utility function to convert the global_model to bytes for gRPC
+            print("[Serialize] Converting model weights to bytes...")
+            payload_bytes = get_weights_as_bytes(global_model)
             
-            # B. Serialize Weights
-            # payload_bytes = serialize_weights(model)
-            payload_bytes = serialize_weights(model) # Placeholder
-            my_samples = 100
+            # Note: We remove `my_samples = 100` because `my_samples` was 
+            # already correctly returned by `SentimentPyTorch.train_local()`
             
             # C. Gossip: Send weights to peers
             for peer in peers:
