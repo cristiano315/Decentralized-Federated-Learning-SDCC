@@ -44,7 +44,7 @@ def main():
     # 1. Prepare data (Runs ONCE)
     # ==========================================
     file_path = "./all_data_niid_05_keep_3_train_9.json"
-    X_train, Off_train, Y_train, X_val, Off_val, Y_val, word_to_ix, glove_path = SentimentPyTorch.prepare_dataset(file_path)
+    X_train, Mask_train, Y_train, X_val, Mask_val, Y_val = SentimentPyTorch.prepare_dataset(file_path)
     
     # ==========================================
     # 2. Prepare global model
@@ -52,13 +52,7 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"[Init] Initializing global model on {device}...")
     
-    global_model = SentimentPyTorch(
-        vocab_size=len(word_to_ix),
-        embed_dim=50,
-        num_class=2,
-        word_to_id=word_to_ix,
-        embedding_file_path=glove_path
-    )
+    global_model = SentimentPyTorch(num_class=2)
     global_model.to(device)
 
     # ==========================================
@@ -107,10 +101,10 @@ def main():
             global_model, my_samples = SentimentPyTorch.train_local(
                 model=global_model, 
                 X_train=X_train, 
-                Off_train=Off_train, 
+                Mask_train=Mask_train, 
                 Y_train=Y_train, 
                 X_val=X_val, 
-                Off_val=Off_val, 
+                Mask_val=Mask_val, 
                 Y_val=Y_val, 
                 device=device
             )

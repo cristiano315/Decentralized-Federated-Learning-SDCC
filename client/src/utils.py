@@ -6,7 +6,16 @@ import torch
 def get_weights_as_bytes(model):
     """Extract weights from the model and convert them to bytes for gRPC"""
     buffer = io.BytesIO()
-    torch.save(model.state_dict(), buffer)
+    
+    # 1. Get the full dictionary of all weights
+    full_state_dict = model.state_dict()
+
+    # 2. Filter out the heavy, frozen BERT layers. 
+    # We only want keys that start with 'fc.' (like 'fc.weight' and 'fc.bias')
+    fc_state_dict = {k: v for k, v in full_state_dict.items() if k.startswith('fc.')}
+    
+    # 3. Save only the tiny classification head
+    torch.save(fc_state_dict, buffer)
     return buffer.getvalue()
 
 #Weight deserialization
