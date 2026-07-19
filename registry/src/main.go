@@ -131,7 +131,7 @@ func main() {
 		env := []utils.EnvVar{
 			{Key: "CLIENT_ID", Value: strconv.Itoa(currentClientID)},
 			{Key: "TRAINING_NODES", Value: strconv.Itoa(clientNumber)},
-
+			{Key: "PORT", Value: "50051"},
 			{Key: "TOTAL_ROUNDS", Value: "3"},
 			{Key: "NUM_PEERS_REQUIRED", Value: "4"},
 			{Key: "MAX_DISCOVERY_RETRIES", Value: "5"},
