@@ -36,7 +36,7 @@ def get_ecs_container_ip():
     metadata_url = os.getenv("ECS_CONTAINER_METADATA_URI_V4")
     
     if not metadata_url:
-        return "Variabile ECS_CONTAINER_METADATA_URI_V4 non trovata. Non sei su ECS?"
+        return "Variable ECS_CONTAINER_METADATA_URI_V4 not found. Not running on ECS?"
 
     try:
         with urllib.request.urlopen(metadata_url) as response:
@@ -48,9 +48,9 @@ def get_ecs_container_ip():
                 return networks[0]['IPv4Addresses'][0]
                 
     except Exception as e:
-        return f"Errore durante la lettura dei metadati: {e}"
+        return f"Error reading metadata: {e}"
 
-    return "Indirizzo IP non trovato nei metadati"
+    return "IP address not found in metadata"
 
 def main():
     # Configuration
