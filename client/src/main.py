@@ -56,13 +56,13 @@ def main():
     # Configuration
     MY_ID = os.getenv("CLIENT_ID")
     MY_IP = get_ecs_container_ip()
-    MY_PORT = os.getenv("PORT", "50051")
+    MY_PORT = int(os.getenv("PORT", 50051))
     REGISTRY_ADDR = os.getenv("REGISTRY_ADRESS")
-    TRAINING_NODES = os.getenv("TRAINING_NODES", 5)
-    TOTAL_ROUNDS = os.getenv("TOTAL_ROUNDS", 5)
-    NUM_PEERS_REQUIRED = TRAINING_NODES - 1 # Exclude self
-    MAX_DISCOVERY_RETRIES = os.getenv("MAX_DISCOVERY_RETRIES", 5)
-    WEIGHT_WAIT_TIMEOUT_SECONDS = os.getenv("WEIGHT_WAIT_TIMEOUT_SECONDS", 30)
+    TRAINING_NODES = int(os.getenv("TRAINING_NODES", 5))
+    TOTAL_ROUNDS = int(os.getenv("TOTAL_ROUNDS", 5))
+    NUM_PEERS_REQUIRED = int(os.getenv("NUM_PEERS_REQUIRED", TRAINING_NODES - 1)) # to exclude self node
+    MAX_DISCOVERY_RETRIES = int(os.getenv("MAX_DISCOVERY_RETRIES", 5))
+    WEIGHT_WAIT_TIMEOUT_SECONDS = int(os.getenv("WEIGHT_WAIT_TIMEOUT_SECONDS", 30))
     
     print("Client is running.")
 
