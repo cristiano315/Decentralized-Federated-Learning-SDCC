@@ -1,9 +1,11 @@
 #File for grpc calls implementation
 
+import random
+import threading
+
 import grpc
 import federated_pb2 as federated_pb2
 import federated_pb2_grpc as federated_pb2_grpc
-from utils import load_weights_from_bytes
 
 # =====================================================================
 # REGISTRY CALLS
@@ -91,26 +93,54 @@ class FederatedNodeServicer(federated_pb2_grpc.FederatedNodeServicer):
     gRPC Server class that runs in the background of each node.
     Listens for incoming weights from peers in the decentralized network.
     """
-    def __init__(self):
-        # Buffer to store incoming weights during the current training round
+    def __init__(self, my_id):
+        self.my_id = my_id
         self.received_weights = []
+        self.seen_messages = set()
+        self.lock = threading.Lock()
+        self.peers = []
+        self.fanout = 2  # Number of peers to forward the message to for every gossip hop
 
     def SendWeights(self, request, context):
         """
         Triggered when another node calls this RPC.
         """
-        # Convert incoming bytes to PyTorch state_dict immediately
-        state_dict = load_weights_from_bytes(request.model_weights)
+        msg_id = (request.sender_id, request.round_number)
         
-        # Store for the aggregation phase
-        self.received_weights.append({
-            "sender_id": request.sender_id,
-            "round_number": request.round_number,
-            "state_dict": state_dict,
-            "samples": request.num_samples,
-        })
+        with self.lock:
+            if msg_id in self.seen_messages:
+                # Ignore msg to avoid loops
+                return federated_pb2.Empty()
+            
+            self.seen_messages.add(msg_id)
+            self.received_weights.append(request)
+            
+        # Forward the gossip to a subset of peers in a separate thread to avoid blocking
+        threading.Thread(target=self._forward_gossip, args=(request,)).start()
         
-        return federated_pb2.Ack(success=True, message="Weights received successfully")
+        return federated_pb2.Empty()
+
+    def _forward_gossip(self, request):
+        # Exclude self and sender
+        available_peers = [
+            p for p in self.peers 
+            if p['id'] != request.sender_id and p['id'] != self.my_id
+        ]
+        
+        k = min(self.fanout, len(available_peers))
+        if k == 0:
+            return
+        
+        selected_peers = random.sample(available_peers, k)
+        
+        for peer in selected_peers:
+            try:
+                # Forward the same identical payload (maintains the original sender_id)
+                send_weights_to_peer(peer['ip'], peer['port'], request)
+            except Exception as e:
+                print(f"[Gossip] Error forwarding to {peer['id']}: {e}")
+
+
 
 def send_weights_to_peer(peer_ip: str, peer_port: int, payload: federated_pb2.WeightPayload):
     """

@@ -1,3 +1,5 @@
+from random import random
+
 import grpc
 from concurrent import futures
 import time
@@ -11,14 +13,14 @@ import federated_pb2_grpc as federated_pb2_grpc
 
 from model import SentimentPyTorch
 from aggregator import apply_fedavg
-from utils import get_weights_as_bytes  # Added serialization utility
+from utils import get_weights_as_bytes, load_weights_from_bytes
 
-def start_grpc_server(port: int) -> tuple:
+def start_grpc_server(port: int, my_id: str) -> tuple:
     """
     Initializes and starts the background gRPC server.
     """
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
-    servicer = FederatedNodeServicer()
+    servicer = FederatedNodeServicer(my_id=my_id)
     federated_pb2_grpc.add_FederatedNodeServicer_to_server(servicer, server)
     server.add_insecure_port(f'[::]:{port}')
     server.start()
@@ -68,7 +70,7 @@ def main():
     # ==========================================
     # 4. Start gRPC server
     # ==========================================
-    server, servicer = start_grpc_server(MY_PORT)
+    server, servicer = start_grpc_server(MY_PORT, MY_ID)
 
     # ==========================================
     # 5. Discovery
@@ -88,6 +90,8 @@ def main():
             retries += 1
     
     print(f"Found {len(peers)} peers ready for gossip.")
+
+    servicer.peers = peers
     
     # ==========================================
     # 6. Training loop
@@ -112,9 +116,16 @@ def main():
             # B. Serialize Weights for Gossip
             print("[Serialize] Converting model weights to bytes...")
             payload_bytes = get_weights_as_bytes(global_model)
+
+            # Add self to seen messages to avoid processing our own gossip
+            servicer.seen_messages.add((MY_ID, round_num))
             
-            # C. Gossip: Send weights to peers
-            for peer in peers:
+            # C. Gossip: Send weights to a random subset of peers
+            gossip_fanout = 2
+            k = min(gossip_fanout, len(peers))
+            initial_gossip_peers = random.sample(peers, k)
+            
+            for peer in initial_gossip_peers:
                 print(f"[Gossip] Sending weights to {peer['id']}...")
                 payload = federated_pb2.WeightPayload(
                     sender_id=MY_ID,
@@ -139,7 +150,18 @@ def main():
             
             # E. Aggregation
             print("[Aggregate] Running FedAvg...")
-            global_model = apply_fedavg(global_model, servicer.received_weights, my_samples)
+
+            deserialized_models = []
+            # Deserialize received weights and prepare for aggregation
+            for request in servicer.received_weights:
+                state_dict = load_weights_from_bytes(request.model_weights)
+                
+                deserialized_models.append({
+                    'weights': state_dict,
+                    'num_samples': request.num_samples
+                })
+
+            global_model = apply_fedavg(global_model, deserialized_models, my_samples)
             
             # F. Clear Buffer for the next round
             servicer.received_weights.clear()
