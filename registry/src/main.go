@@ -7,12 +7,15 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"net"
 
 	"strconv"
 
 	pb "federate-registry/federated"
 
 	utils "federate-registry/utils"
+
+	"google.golang.org/grpc"
 )
 
 // =====================================================================
@@ -71,9 +74,9 @@ func (s *registryServer) Discover(ctx context.Context, req *pb.DiscoverRequest) 
 	// Check if there are enough registered nodes, if not, create them
 	if requiredPeers > len(s.nodes) {
 		// Check if there are enough nodes in DynamoDB
-		dynamoNodes := 20                //CHANGE WITH DYNAMODB CALL
+		dynamoNodes := len(s.nodes)                //CHANGE WITH DYNAMODB CALL
 		if dynamoNodes < requiredPeers { // Not enough nodes in DynamoDB either
-			// RAISE REQUIRED NODES
+			raiseRequiredNodes(requiredPeers - dynamoNodes)
 		} else {
 			// GET REQUIRED NODES FROM DYNAMODB, ADD THEM TO THE LIST AND RETURN THEM
 			// REMEMBER TO PING THEM USING THE PING RPC TO CHECK IF THEY ARE ALIVE BEFORE RETURNING THEM
@@ -114,12 +117,7 @@ func (s *registryServer) UnregisterNode(ctx context.Context, req *pb.NodeInfo) (
 	}, nil
 }
 
-// =====================================================================
-// MAIN SERVER SETUP
-// =====================================================================
-
-func main() {
-
+func raiseRequiredNodes(required int) {
 	local := utils.GetFullLocalAdress()
 
 	clientNumber := 5
@@ -145,10 +143,18 @@ func main() {
 		}
 	}
 
-	fmt.Printf("Hello AWS")
+	fmt.Printf("Raised required nodes to %d\n", required)
 }
 
-/*
+// =====================================================================
+// MAIN SERVER SETUP
+// =====================================================================
+
+func main() {
+
+	// Raise 1 node to start the training
+	raiseRequiredNodes(1)
+
 	// 1. Define the port the Go server will listen on
 	port := ":8080"
 	lis, err := net.Listen("tcp", port)
@@ -173,4 +179,3 @@ func main() {
 		log.Fatalf("[FATAL] Failed to serve gRPC server: %v", err)
 	}
 }
-*/
