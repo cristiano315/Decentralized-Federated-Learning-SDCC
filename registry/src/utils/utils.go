@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"time"
+
+	"net"
+	"os"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -18,6 +20,19 @@ import (
 
 	pb "federate-registry/federated"
 )
+
+// =====================================================================
+// ENVIROMENT VARIABLE STRUCT
+// =====================================================================
+
+type EnvVar struct {
+	Key   string
+	Value string
+}
+
+// =====================================================================
+// FUNCTIONS
+// =====================================================================
 
 func AddNode(node *pb.NodeInfo) error {
 	// Using the SDK's default configuration, load additional config
@@ -142,7 +157,7 @@ func FetchActiveNodes() ([]*pb.NodeInfo, error) {
 	return items, err
 }
 
-func LaunchTask(task string, ammount int32) error {
+func LaunchTask(cluster string, task string, ammount int32, container string, params []EnvVar) error {
 	// Using the SDK's default configuration, load additional config
 	// and credentials values from the environment variables, shared
 	// credentials, and shared configuration files
@@ -154,33 +169,36 @@ func LaunchTask(task string, ammount int32) error {
 	// Using the Config value, create the ECS client
 	client := ecs.NewFromConfig(cfg)
 
+	envVariables := make([]ecstypes.KeyValuePair, len(params))
+
+	for i, p := range params {
+		envVariables[i] = ecstypes.KeyValuePair{
+			Name:  aws.String(p.Key),
+			Value: aws.String(p.Value),
+		}
+	}
+
 	// Define the RunTask input
 	input := &ecs.RunTaskInput{
-		Cluster:        aws.String("clients"),
+		Cluster:        aws.String(cluster),
 		TaskDefinition: aws.String(task),
 		LaunchType:     ecstypes.LaunchTypeFargate,
 		Count:          aws.Int32(ammount),
-		/*
-					Overrides: &ecstypes.TaskOverride{
-			            ContainerOverrides: []ecstypes.ContainerOverride{
-			                {
-			                    Name: aws.String("my-app-container"), // Must match Task Def
-			                    Environment: []ecstypes.KeyValuePair{
-			                        {
-			                            Name:  aws.String("STAGE"),
-			                            Value: aws.String("PROD"),
-			                        },
-			                    },
-			                },
-			            },
-			        },
-		*/
 
 		NetworkConfiguration: &ecstypes.NetworkConfiguration{
 			AwsvpcConfiguration: &ecstypes.AwsVpcConfiguration{
-				Subnets: []string{"subnet-04c8bd531ed80fa30", "subnet-02d82ec3a388354c1", "subnet-0569bbf51b6235702", "subnet-0caba6f1751703166", "subnet-0f9fb6c71c73e8a44", "subnet-0fafc3fd7c6512117"},
-				//SecurityGroups: []string{"sg-zzzzzzzz"},
+				Subnets: []string{"subnet-049b938577203e317", "subnet-04ec6d7a5a15cedcc", "subnet-06db11df621ee60eb", "subnet-0ac28f8e5d64980c9", "subnet-0c126c2d6158e8ccd", "subnet-08394add4030de621"},
+				//SecurityGroups: []string{"sg-xxxxxxxx"},
 				AssignPublicIp: ecstypes.AssignPublicIpEnabled,
+			},
+		},
+
+		Overrides: &ecstypes.TaskOverride{
+			ContainerOverrides: []ecstypes.ContainerOverride{
+				{
+					Name:        aws.String(container),
+					Environment: envVariables,
+				},
 			},
 		},
 	}
@@ -223,76 +241,34 @@ func DestroyTask(task string) error {
 	return err
 }
 
-func ScaleService(ammount int32) error {
-	// Using the SDK's default configuration, load additional config
-	// and credentials values from the environment variables, shared
-	// credentials, and shared configuration files
-	cfg, err := config.LoadDefaultConfig(context.TODO())
+func GetLocalIP() (string, error) {
+	addrs, err := net.InterfaceAddrs()
 	if err != nil {
-		return err
+		return "", err
 	}
 
-	// Using the Config value, create the ECS client
-	ecs_client := ecs.NewFromConfig(cfg)
-
-	// Define the UpdateService input
-	input := &ecs.UpdateServiceInput{
-		Cluster:      aws.String("clients"),
-		Service:      aws.String("test_client-service"),
-		DesiredCount: aws.Int32(ammount),
-	}
-
-	// Execute the request
-	_, err = ecs_client.UpdateService(context.TODO(), input)
-	if err != nil {
-		return err
-	}
-
-	// Initialize the Waiter (15 seconds by default)
-	waiter := ecs.NewServicesStableWaiter(ecs_client)
-
-	// Define max waiting time
-	maxWaitTime := 2 * time.Minute
-
-	err = waiter.Wait(context.TODO(), &ecs.DescribeServicesInput{
-		Cluster:  aws.String("clients"),
-		Services: []string{"test_client-service"},
-	}, maxWaitTime)
-	return err
-}
-
-// NOT TESTED YET
-func KillAllTasks() error {
-	// Using the SDK's default configuration, load additional config
-	// and credentials values from the environment variables, shared
-	// credentials, and shared configuration files
-	cfg, err := config.LoadDefaultConfig(context.TODO())
-	if err != nil {
-		return err
-	}
-
-	// Using the Config value, create the ECS client
-	ecs_client := ecs.NewFromConfig(cfg)
-
-	// Get all Task ARNs
-	listOutput, err := ecs_client.ListTasks(context.TODO(), &ecs.ListTasksInput{
-		Cluster:     aws.String("clients"),
-		ServiceName: aws.String("test_client-service"),
-	})
-	if err != nil {
-		return err
-	}
-
-	for _, taskArn := range listOutput.TaskArns {
-		_, err := ecs_client.StopTask(context.TODO(), &ecs.StopTaskInput{
-			Cluster: aws.String("clients"),
-			Task:    aws.String(taskArn),
-			Reason:  aws.String("Mass termination triggered by Go SDK"),
-		})
-		if err != nil {
-			fmt.Printf("Failed to stop %s: %v\n", taskArn, err)
+	for _, address := range addrs {
+		if ipnet, ok := address.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
+			// Prendi solo l'IPv4
+			if ipnet.IP.To4() != nil {
+				return ipnet.IP.String(), nil
+			}
 		}
 	}
+	return "", fmt.Errorf("nessun IP valido trovato")
+}
 
-	return err
+func GetPort() string {
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+	return port
+}
+
+func GetFullLocalAdress() string {
+	ip, _ := GetLocalIP()
+	port := GetPort()
+
+	return net.JoinHostPort(ip, port)
 }

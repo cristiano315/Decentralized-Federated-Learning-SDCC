@@ -6,10 +6,9 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"net"
 	"sync"
 
-	"google.golang.org/grpc"
+	"strconv"
 
 	pb "federate-registry/federated"
 
@@ -121,8 +120,35 @@ func (s *registryServer) UnregisterNode(ctx context.Context, req *pb.NodeInfo) (
 
 func main() {
 
-	fmt.Printf("Hello AWS")
+	local := utils.GetFullLocalAdress()
 
+	clientNumber := 5
+	currentClientID := 0
+
+	for range clientNumber {
+
+		currentClientID++
+		env := []utils.EnvVar{
+			{Key: "CLIENT_ID", Value: strconv.Itoa(currentClientID)},
+			{Key: "TRAINING_NODES", Value: strconv.Itoa(clientNumber)},
+
+			{Key: "TOTAL_ROUNDS", Value: "3"},
+			{Key: "NUM_PEERS_REQUIRED", Value: "4"},
+			{Key: "MAX_DISCOVERY_RETRIES", Value: "5"},
+			{Key: "WEIGHT_WAIT_TIMEOUT_SECONDS", Value: "30"},
+			{Key: "REGISTRY_ADRESS", Value: local},
+		}
+
+		err := utils.LaunchTask("federated_cluster", "client_task", 1, "client_container", env)
+		if err != nil {
+			fmt.Printf("AWS Error: %s\n", err.Error())
+		}
+	}
+
+	fmt.Printf("Hello AWS")
+}
+
+/*
 	// 1. Define the port the Go server will listen on
 	port := ":8080"
 	lis, err := net.Listen("tcp", port)
@@ -147,3 +173,4 @@ func main() {
 		log.Fatalf("[FATAL] Failed to serve gRPC server: %v", err)
 	}
 }
+*/
