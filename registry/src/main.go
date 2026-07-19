@@ -35,11 +35,22 @@ type registryServer struct {
 
 	// Map to store active nodes. Key: node_id, Value: NodeInfo
 	nodes map[string]*pb.NodeInfo
+
+	cond  *sync.Cond
 }
 
 // =====================================================================
 // RPC METHODS IMPLEMENTATION
 // =====================================================================
+
+func (s *registryServer) WaitNodes(x int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for len(s.nodes) < x {
+		s.cond.Wait()
+	}
+}
 
 // RegisterNode handles incoming registration requests from Python clients.
 func (s *registryServer) RegisterNode(ctx context.Context, req *pb.NodeInfo) (*pb.RegisterResponse, error) {
@@ -86,12 +97,16 @@ func (s *registryServer) Discover(ctx context.Context, req *pb.DiscoverRequest) 
 	}
 
 	// Iterate over all registered nodes
+	s.nodes.WaitNodes(requiredPeers) // Wait until enough nodes are registered
+	
+	s.mu.Lock()
 	for _, node := range s.nodes {
 		// Do not include the node that made the request in the returned peer list
 		if node.NodeId != req.NodeId {
 			peerList = append(peerList, node)
 		}
 	}
+	s.mu.Unlock()
 
 	log.Printf("[DISCOVERY] Node %s requested peers. Returning %d peers.\n", req.NodeId, len(peerList))
 
@@ -105,6 +120,7 @@ func (s *registryServer) UnregisterNode(ctx context.Context, req *pb.NodeInfo) (
 	// Lock the map for writing to prevent race conditions
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	defer s.cond.Broadcast() // Notify any waiting goroutines that a node has left
 
 	// Remove the node from the in-memory map
 	delete(s.nodes, req.NodeId)
@@ -118,6 +134,7 @@ func (s *registryServer) UnregisterNode(ctx context.Context, req *pb.NodeInfo) (
 		Message: fmt.Sprintf("Node %s successfully unregistered.", req.NodeId),
 	}, nil
 }
+
 
 func raiseRequiredNodes(required int) {
 	local := utils.GetFullLocalAdress()
@@ -153,9 +170,6 @@ func raiseRequiredNodes(required int) {
 
 func main() {
 
-	// Raise 1 node to start the training
-	raiseRequiredNodes(1)
-
 	// 1. Define the port the Go server will listen on
 	port := ":8080"
 	lis, err := net.Listen("tcp", port)
@@ -170,6 +184,7 @@ func main() {
 	myServer := &registryServer{
 		nodes: make(map[string]*pb.NodeInfo),
 	}
+	myServer.cond = sync.NewCond(&myServer.mu)
 
 	// 4. Register our server with the gRPC framework
 	pb.RegisterRegistryServiceServer(grpcServer, myServer)
@@ -179,4 +194,7 @@ func main() {
 	if err := grpcServer.Serve(lis); err != nil {
 		log.Fatalf("[FATAL] Failed to serve gRPC server: %v", err)
 	}
+
+	// Raise 1 node to start the training
+	raiseRequiredNodes(1)
 }
