@@ -1,9 +1,13 @@
+import json
 from random import random
 
 import grpc
 from concurrent import futures
 import time
 import torch
+import os
+
+import urllib
 
 # Import generated gRPC code
 from rpc_calls import RegistryClient, send_weights_to_peer
@@ -28,17 +32,39 @@ def start_grpc_server(port: int, my_id: str) -> tuple:
     print(f"[Server] Background gRPC server listening on port {port}...")
     return server, servicer
 
+def get_ecs_container_ip():
+    metadata_url = os.getenv("ECS_CONTAINER_METADATA_URI_V4")
+    
+    if not metadata_url:
+        return "Variabile ECS_CONTAINER_METADATA_URI_V4 non trovata. Non sei su ECS?"
+
+    try:
+        # Facciamo la richiesta GET all'endpoint locale di AWS
+        with urllib.request.urlopen(metadata_url) as response:
+            body = response.read().decode('utf-8')
+            metadata = json.loads(body)
+            
+            # Navighiamo il JSON per prendere il primo indirizzo IPv4
+            networks = metadata.get('Networks', [])
+            if networks and 'IPv4Addresses' in networks[0]:
+                return networks[0]['IPv4Addresses'][0]
+                
+    except Exception as e:
+        return f"Errore durante la lettura dei metadati: {e}"
+
+    return "Indirizzo IP non trovato nei metadati"
+
 def main():
     # Configuration
-    MY_ID = "client-1"
-    MY_IP = "127.0.0.1"
-    MY_PORT = 50051
-    REGISTRY_ADDR = "127.0.0.1:8080"
-    TRAINING_NODES = 5
-    TOTAL_ROUNDS = 3
+    MY_ID = os.getenv("CLIENT_ID")
+    MY_IP = get_ecs_container_ip()
+    MY_PORT = port = os.getenv("PORT", "50051")
+    REGISTRY_ADDR = os.getenv("REGISTRY_ADRESS")
+    TRAINING_NODES = os.getenv("TRAINING_NODES", 5)
+    TOTAL_ROUNDS = os.getenv("TOTAL_ROUNDS", 5)
     NUM_PEERS_REQUIRED = TRAINING_NODES - 1 # Exclude self
-    MAX_DISCOVERY_RETRIES = 5
-    WEIGHT_WAIT_TIMEOUT_SECONDS = 30
+    MAX_DISCOVERY_RETRIES = os.getenv("MAX_DISCOVERY_RETRIES", 5)
+    WEIGHT_WAIT_TIMEOUT_SECONDS = os.getenv("WEIGHT_WAIT_TIMEOUT_SECONDS", 30)
     
     print("Client is running.")
 
