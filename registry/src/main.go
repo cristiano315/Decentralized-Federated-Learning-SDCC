@@ -18,6 +18,8 @@ import (
 	"google.golang.org/grpc"
 )
 
+var currentClientID = 0
+
 // =====================================================================
 // SERVER STRUCT
 // =====================================================================
@@ -120,8 +122,7 @@ func (s *registryServer) UnregisterNode(ctx context.Context, req *pb.NodeInfo) (
 func raiseRequiredNodes(required int) {
 	local := utils.GetFullLocalAdress()
 
-	clientNumber := 5
-	currentClientID := 0
+	clientNumber := required
 
 	for range clientNumber {
 
