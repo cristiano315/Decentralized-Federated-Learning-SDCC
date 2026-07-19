@@ -189,12 +189,12 @@ func main() {
 	// 4. Register our server with the gRPC framework
 	pb.RegisterRegistryServiceServer(grpcServer, myServer)
 
+	// Raise 1 node to start the training
+	raiseRequiredNodes(1)
+
 	// 5. Start serving incoming requests
 	log.Printf("[INFO] Go Service Registry is running and listening on port %s...\n", port)
 	if err := grpcServer.Serve(lis); err != nil {
 		log.Fatalf("[FATAL] Failed to serve gRPC server: %v", err)
 	}
-
-	// Raise 1 node to start the training
-	raiseRequiredNodes(1)
 }
