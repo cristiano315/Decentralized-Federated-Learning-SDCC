@@ -13,7 +13,7 @@ import federated_pb2_grpc as federated_pb2_grpc
 
 from model import SentimentPyTorch
 from aggregator import apply_fedavg
-from utils import get_weights_as_bytes, load_weights_from_bytes
+from utils import calculate_k, get_weights_as_bytes, load_weights_from_bytes
 
 def start_grpc_server(port: int, my_id: str) -> tuple:
     """
@@ -90,8 +90,13 @@ def main():
             retries += 1
     
     print(f"Found {len(peers)} peers ready for gossip.")
+    
+    # Calculate dynamic gossip fanout based on the number of peers
+    k = calculate_k(peers)
+    print(f"[Info] Network of {len(peers) + 1} nodes. Gossip fanout (k) dynamically set to {k}.")
 
     servicer.peers = peers
+    servicer.fanout = k
     
     # ==========================================
     # 6. Training loop
@@ -121,9 +126,8 @@ def main():
             servicer.seen_messages.add((MY_ID, round_num))
             
             # C. Gossip: Send weights to a random subset of peers
-            gossip_fanout = 2
-            k = min(gossip_fanout, len(peers))
-            initial_gossip_peers = random.sample(peers, k)
+            actual_k = min(k, len(peers))
+            initial_gossip_peers = random.sample(peers, actual_k)
             
             for peer in initial_gossip_peers:
                 print(f"[Gossip] Sending weights to {peer['id']}...")
