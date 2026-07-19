@@ -56,7 +56,7 @@ def main():
     # Configuration
     MY_ID = os.getenv("CLIENT_ID")
     MY_IP = get_ecs_container_ip()
-    MY_PORT = port = os.getenv("PORT", "50051")
+    MY_PORT = os.getenv("PORT", "50051")
     REGISTRY_ADDR = os.getenv("REGISTRY_ADRESS")
     TRAINING_NODES = os.getenv("TRAINING_NODES", 5)
     TOTAL_ROUNDS = os.getenv("TOTAL_ROUNDS", 5)
