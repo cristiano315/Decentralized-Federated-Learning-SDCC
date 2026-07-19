@@ -97,7 +97,7 @@ func (s *registryServer) Discover(ctx context.Context, req *pb.DiscoverRequest) 
 	}
 
 	// Iterate over all registered nodes
-	s.nodes.WaitNodes(requiredPeers) // Wait until enough nodes are registered
+	s.WaitNodes(requiredPeers) // Wait until enough nodes are registered
 	
 	s.mu.Lock()
 	for _, node := range s.nodes {
