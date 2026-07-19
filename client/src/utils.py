@@ -1,5 +1,6 @@
 #File for utility functions
 import io
+import math
 import torch
 
 #Weight serialization
@@ -23,3 +24,15 @@ def load_weights_from_bytes(weights_bytes):
     """Extract weights from bytes received via gRPC and convert them to a PyTorch dictionary"""
     buffer = io.BytesIO(weights_bytes)
     return torch.load(buffer, weights_only=True)
+
+#Gossip
+def calculate_k(num_peers):
+    """Calculate the number of peers to gossip to based on the total number of peers"""
+    
+    N = len(num_peers) + 1 
+    
+    # k = ceil(ln(N)) + c
+    c = 1  # Redundancy constant to ensure some overlap in gossiping
+    k = math.ceil(math.log(N)) + c
+    return k
+    
