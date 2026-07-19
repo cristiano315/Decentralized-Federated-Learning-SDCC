@@ -39,12 +39,10 @@ def get_ecs_container_ip():
         return "Variabile ECS_CONTAINER_METADATA_URI_V4 non trovata. Non sei su ECS?"
 
     try:
-        # Facciamo la richiesta GET all'endpoint locale di AWS
         with urllib.request.urlopen(metadata_url) as response:
             body = response.read().decode('utf-8')
             metadata = json.loads(body)
             
-            # Navighiamo il JSON per prendere il primo indirizzo IPv4
             networks = metadata.get('Networks', [])
             if networks and 'IPv4Addresses' in networks[0]:
                 return networks[0]['IPv4Addresses'][0]
