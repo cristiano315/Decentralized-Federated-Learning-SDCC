@@ -69,9 +69,10 @@ def main():
     # ==========================================
     # 1. Prepare data (Runs ONCE)
     # ==========================================
-    file_path = "./all_data_niid_05_keep_3_train_9.json"
-    X_train, Mask_train, Y_train, X_val, Mask_val, Y_val = SentimentPyTorch.prepare_dataset(file_path)
-    
+    bucket_name = "sdcc-dataset-771379920513-us-east-1-an"
+    s3_key = "all_data_niid_05_keep_3_train_9.json"
+    X_train, Mask_train, Y_train, X_val, Mask_val, Y_val = SentimentPyTorch.prepare_dataset(bucket_name, s3_key)
+
     # ==========================================
     # 2. Prepare global model
     # ==========================================

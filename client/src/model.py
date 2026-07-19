@@ -1,5 +1,6 @@
 #File for the model definition, and training, to implement
 import json
+import boto3
 import pandas as pd
 import numpy as np
 #import sklearn
@@ -44,10 +45,17 @@ class SentimentPyTorch(nn.Module):
         return self.fc(cls_token_state)
 
     @staticmethod
-    def prepare_dataset(file_path, seed=42):
+    def prepare_dataset(bucket_name, s3_key, seed=42):
         print("[Data Prep] Loading JSON data...")
-        with open(file_path, 'r') as f:
-            raw_data = json.load(f)
+        
+        # Load JSON data from S3
+        s3 = boto3.client('s3')
+        bucket = bucket_name
+        key = s3_key
+        response = s3.get_object(Bucket=bucket, Key=key)
+
+        # Read the JSON content from the S3 response
+        raw_data = json.loads(response['Body'].read().decode('utf-8'))
 
         texts, labels = [], []
         for user in raw_data['users']:
