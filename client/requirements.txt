@@ -2,6 +2,7 @@
 torch
 torchvision
 scikit-learn
+transformers
 
 # Communication
 grpcio
