@@ -5,11 +5,11 @@ import pandas as pd
 import numpy as np
 #import sklearn
 #from sklearn.feature_extraction.text import CountVectorizer
-import matplotlib.pyplot as plt
-import seaborn as sns
+# import matplotlib.pyplot as plt
+# import seaborn as sns
 from collections import Counter
 # reduce words
-from nltk.corpus import stopwords
+#from nltk.corpus import stopwords
 #from sklearn.tree import DecisionTreeClassifier
 import copy
 from sklearn.model_selection import train_test_split
