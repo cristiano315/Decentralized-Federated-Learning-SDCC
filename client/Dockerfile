@@ -15,7 +15,7 @@ RUN apt-get update && apt-get install -y make && rm -rf /var/lib/apt/lists/*
 
 # Copy the requirements file
 COPY client/requirements.txt ./client/
-RUN pip install --no-cache-dir -r client/requirements.txt
+RUN pip install --default-timeout=10000 --no-cache-dir -r client/requirements.txt
 
 # Copy the proto folder and the client source code from the root context
 COPY proto/ ./proto/
