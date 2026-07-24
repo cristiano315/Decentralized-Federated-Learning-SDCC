@@ -22,8 +22,8 @@ def apply_fedavg(global_model, received_payloads, local_samples):
     for payload in received_payloads:
         # payload is a Python dict created by rpc_calls.py, NOT a raw gRPC object
         weights_list.append({
-            'state_dict': payload['state_dict'],
-            'num_samples': payload['samples']
+            'state_dict': payload['weights'],
+            'num_samples': payload['num_samples']
         })
 
     # 3. Calculate total samples

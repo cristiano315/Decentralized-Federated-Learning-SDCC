@@ -249,7 +249,12 @@ func GetLocalIP() (string, error) {
 
 	for _, address := range addrs {
 		if ipnet, ok := address.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
-			// Prendi solo l'IPv4
+			// skip link-local addresses like 169.254.x.x
+			if ipnet.IP.IsLinkLocalUnicast() {
+				continue
+			}
+
+			// return the first valid IPv4
 			if ipnet.IP.To4() != nil {
 				return ipnet.IP.String(), nil
 			}

@@ -21,6 +21,7 @@ from transformers import DistilBertModel, DistilBertTokenizer
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.data import TensorDataset, DataLoader
 # from embeddings import PretrainedEmbeddings
 
 
@@ -64,6 +65,17 @@ class SentimentPyTorch(nn.Module):
                 # Ensure labels are 0 (neg) and 1 (pos)
                 labels.append(1 if label == 4 else label)
 
+        # ---------------------------------------------------------
+        # RIMUOVI RIMOUVI RIMOUVI
+        # RIDUZIONE AL 10% DEL DATASET (Prima della tokenizzazione)
+        # ---------------------------------------------------------
+        percentage = 0.016
+        total_original = len(texts)
+        texts, _, labels, _ = train_test_split(
+            texts, labels, train_size=percentage, random_state=seed
+        )
+        print(f"[Data Prep] Dataset ridotto al {percentage*100}%: da {total_original} a {len(texts)} campioni totali.")
+        # FINE RIMUOVI --------------
         print("[Data Prep] Tokenizing with DistilBERT...")
         tokenizer = DistilBertTokenizer.from_pretrained('distilbert-base-uncased')
 
@@ -85,51 +97,83 @@ class SentimentPyTorch(nn.Module):
     @staticmethod
     def train_local(model, X_train, Mask_train, Y_train, X_val, Mask_val, Y_val, device):
         """
-        Pure training loop. Takes the current global model and local data tensors.
+        Training loop con elaborazione in mini-batch per evitare errori Out Of Memory.
         Returns the trained model and the number of samples trained on.
         """
         model.to(device)
         criterion = nn.CrossEntropyLoss()
         optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=2e-5)
 
+        # Creazione dei DataLoader per processare i dati in piccoli lotti
+        batch_size = 32 # Abbassa a 16, anche 8 se dovessi avere ancora problemi di memoria
+        
+        train_dataset = TensorDataset(X_train, Mask_train, Y_train)
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+        
+        val_dataset = TensorDataset(X_val, Mask_val, Y_val)
+        val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+
         # Early Stopping Variables
         patience = 4
+        max_epochs = 30
         best_val_loss = float('inf')
         epochs_without_improvement = 0
         best_model_state = None
         
-        num_training_samples = len(Y_train) # Y_train length represents number of tweets
+        num_training_samples = len(Y_train)
 
-        print(f"[Train] Starting local training on {num_training_samples} samples...")
+        print(f"[Train] Starting local training on {num_training_samples} samples with batch size {batch_size}, Totale batch per epoca: {len(train_loader)}...")
         
         # Fase di Training
-        for epoch in range(100):
+        for epoch in range(max_epochs):
             model.train()
-            optimizer.zero_grad()
+            total_train_loss = 0.0
             
-            # Forward pass
-            output = model(X_train.to(device), Mask_train.to(device))
-            loss = criterion(output, Y_train.to(device))
-            
-            # Backward pass e ottimizzazione
-            loss.backward()
-            optimizer.step()
+            # Iterazione sui batch di addestramento
+            for batch_idx, (batch_x, batch_mask, batch_y) in enumerate(train_loader):
+                batch_x, batch_mask, batch_y = batch_x.to(device), batch_mask.to(device), batch_y.to(device)
+                
+                optimizer.zero_grad()
+                output = model(batch_x, batch_mask)
+                loss = criterion(output, batch_y)
+                
+                loss.backward()
+                optimizer.step()
+                
+                total_train_loss += loss.item() * batch_x.size(0)
 
-            # Validation Phase
+                # -----------------------------------------------------
+                # CONTROLLO A GRANA FINE: Stampa log ogni 10 batch
+                # -----------------------------------------------------
+                if (batch_idx + 1) % 10 == 0 or (batch_idx + 1) == len(train_loader):
+                    print(f"[Train] Epoch {epoch+1:02d} | Batch {batch_idx+1:04d}/{len(train_loader):04d} | Current Batch Loss: {loss.item():.4f}")
+
+            avg_train_loss = total_train_loss / num_training_samples
+
+            # Fase di Validazione a lotti
             model.eval()
-            with torch.no_grad():
-                val_output = model(X_val.to(device), Mask_val.to(device))
-                val_loss = criterion(val_output, Y_val.to(device)).item()
-                                
-                # Calculate Val Accuracy for monitoring
-                val_preds = val_output.argmax(1)
-                val_acc = (val_preds == Y_val.to(device)).float().mean().item()
+            total_val_loss = 0.0
+            correct_preds = 0
             
-            print(f"Epoch {epoch+1:02d} | Train Loss: {loss.item():.4f} | Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.4f}")
+            with torch.no_grad():
+                for batch_x, batch_mask, batch_y in val_loader:
+                    batch_x, batch_mask, batch_y = batch_x.to(device), batch_mask.to(device), batch_y.to(device)
+                    
+                    val_output = model(batch_x, batch_mask)
+                    loss = criterion(val_output, batch_y)
+                    total_val_loss += loss.item() * batch_x.size(0)
+                                    
+                    val_preds = val_output.argmax(1)
+                    correct_preds += (val_preds == batch_y).float().sum().item()
+            
+            avg_val_loss = total_val_loss / len(Y_val)
+            val_acc = correct_preds / len(Y_val)
+            
+            print(f"Epoch {epoch+1:02d} | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f} | Val Acc: {val_acc:.4f}")
 
             # Early Stopping Logic
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
+            if avg_val_loss < best_val_loss:
+                best_val_loss = avg_val_loss
                 epochs_without_improvement = 0
                 best_model_state = copy.deepcopy(model.state_dict())
             else:

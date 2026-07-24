@@ -1,5 +1,5 @@
 import json
-from random import random
+import random
 
 import grpc
 from concurrent import futures
@@ -19,7 +19,7 @@ from model import SentimentPyTorch
 from aggregator import apply_fedavg
 from utils import calculate_k, get_weights_as_bytes, load_weights_from_bytes
 
-def start_grpc_server(port: int, my_id: int) -> tuple:
+def start_grpc_server(port: int, my_id: str) -> tuple:
     """
     Initializes and starts the background gRPC server.
     """
@@ -54,7 +54,7 @@ def get_ecs_container_ip():
 
 def main():
     # Configuration
-    MY_ID = int(os.getenv("CLIENT_ID"))
+    MY_ID = str(os.getenv("CLIENT_ID"))
     MY_IP = get_ecs_container_ip()
     MY_PORT = int(os.getenv("PORT", 50051))
     REGISTRY_ADDR = os.getenv("REGISTRY_ADRESS")

@@ -23,13 +23,14 @@ class RegistryClient:
         """
         Registers this node with the central Go Service Registry.
         """
+        print(f"DEBUG ip:{my_ip}, with type: {type(my_ip)}, port: {my_port}, with type: {type(my_port)}")
         try:
             with grpc.insecure_channel(self.registry_address) as channel:
                 stub = federated_pb2_grpc.RegistryServiceStub(channel)
                 payload = federated_pb2.NodeInfo(
                     node_id=self.my_id,
-                    ip_address=my_ip,
-                    port=my_port
+                    ip_address=str(my_ip),
+                    port=int(my_port)
                 )
                 response = stub.RegisterNode(payload)
                 print(f"[RPC] Registration success: {response.message}")
@@ -47,12 +48,13 @@ class RegistryClient:
                 stub = federated_pb2_grpc.RegistryServiceStub(channel)
                 request = federated_pb2.DiscoverRequest(
                     node_id=self.my_id,
-                    request_count=node_request_count
+                    request_count=int(node_request_count)
                 )
                 response = stub.DiscoverNodes(request)
                 
                 # Convert gRPC repeated field to a standard Python list
-                peers = [{"id": p.node_id, "ip": p.ip_address, "port": p.port} for p in response.peers]
+                # ATTENZIONE: Il proto definisce il campo come 'nodes', non 'peers'
+                peers = [{"id": p.node_id, "ip": p.ip_address, "port": p.port} for p in response.nodes]
                 return peers
         except grpc.RpcError as e:
             print(f"[RPC Error] Discovery failed: {e.details()}")
@@ -74,8 +76,8 @@ class RegistryClient:
                 stub = federated_pb2_grpc.RegistryServiceStub(channel)
                 payload = federated_pb2.NodeInfo(
                     node_id=self.my_id,
-                    ip_address=my_ip,
-                    port=my_port
+                    ip_address=str(my_ip),
+                    port=int(my_port)
                 )
                 response = stub.UnregisterNode(payload)
                 print(f"[RPC] Unregistration success: {response.message}")

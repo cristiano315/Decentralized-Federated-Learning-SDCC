@@ -6,8 +6,8 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"sync"
 	"net"
+	"sync"
 
 	"strconv"
 
@@ -36,7 +36,7 @@ type registryServer struct {
 	// Map to store active nodes. Key: node_id, Value: NodeInfo
 	nodes map[string]*pb.NodeInfo
 
-	cond  *sync.Cond
+	cond *sync.Cond
 }
 
 // =====================================================================
@@ -58,13 +58,21 @@ func (s *registryServer) RegisterNode(ctx context.Context, req *pb.NodeInfo) (*p
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	//WAKE UP any clients sleeping in DiscoverNodes
+	defer s.cond.Broadcast()
+
 	// Store the node information in the map
 	s.nodes[req.NodeId] = req
 
 	//call aws dynamodb to store node
 	err := utils.AddNode(req)
 	if err != nil {
-		log.Fatalf("Error adding node, %v", err)
+		// Log the error but DO NOT crash the server
+		log.Printf("[ERROR] Error adding node %s to DynamoDB: %v", req.NodeId, err)
+		return &pb.RegisterResponse{
+			Success: false,
+			Message: fmt.Sprintf("Failed to register node %s due to database error.", req.NodeId),
+		}, nil
 	}
 
 	log.Printf("[REGISTER] Node joined: %s at %s:%d\n", req.NodeId, req.IpAddress, req.Port)
@@ -76,37 +84,43 @@ func (s *registryServer) RegisterNode(ctx context.Context, req *pb.NodeInfo) (*p
 }
 
 // Discover handles requests from nodes asking for the list of peers.
-func (s *registryServer) Discover(ctx context.Context, req *pb.DiscoverRequest) (*pb.DiscoverResponse, error) {
-	// Read-Lock the map (multiple clients can read simultaneously without blocking each other)
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+func (s *registryServer) DiscoverNodes(ctx context.Context, req *pb.DiscoverRequest) (*pb.DiscoverResponse, error) {
+	/*
+		// Read-Lock the map (multiple clients can read simultaneously without blocking each other)
+		s.mu.RLock()
+		defer s.mu.RUnlock()
+	*/
 
 	var peerList []*pb.NodeInfo
 	requiredPeers := int(req.RequestCount)
 
-	// Check if there are enough registered nodes, if not, create them
-	if requiredPeers > len(s.nodes) {
-		// Check if there are enough nodes in DynamoDB
-		dynamoNodes := len(s.nodes)                //CHANGE WITH DYNAMODB CALL
-		if dynamoNodes < requiredPeers { // Not enough nodes in DynamoDB either
-			raiseRequiredNodes(requiredPeers - dynamoNodes)
-		} else {
-			// GET REQUIRED NODES FROM DYNAMODB, ADD THEM TO THE LIST AND RETURN THEM
-			// REMEMBER TO PING THEM USING THE PING RPC TO CHECK IF THEY ARE ALIVE BEFORE RETURNING THEM
+	/*
+		LOGIC REQUIREDNODES CAUSES ENDLESS LOOP, WAIT FOR THE NODES BOOTING
+		// Check if there are enough registered nodes, if not, create them
+		if requiredPeers > len(s.nodes) {
+			// Check if there are enough nodes in DynamoDB
+			dynamoNodes := len(s.nodes)      //CHANGE WITH DYNAMODB CALL
+			if dynamoNodes < requiredPeers { // Not enough nodes in DynamoDB either
+				raiseRequiredNodes(requiredPeers - dynamoNodes)
+			} else {
+				// GET REQUIRED NODES FROM DYNAMODB, ADD THEM TO THE LIST AND RETURN THEM
+				// REMEMBER TO PING THEM USING THE PING RPC TO CHECK IF THEY ARE ALIVE BEFORE RETURNING THEM
+			}
 		}
-	}
+	*/
 
-	// Iterate over all registered nodes
+	//  Wait until enough nodes are registered (WaitNodes handles its own locks)
 	s.WaitNodes(requiredPeers) // Wait until enough nodes are registered
-	
-	s.mu.Lock()
+
+	//Read-lock ONLY for reading the map
+	s.mu.RLock()
 	for _, node := range s.nodes {
 		// Do not include the node that made the request in the returned peer list
 		if node.NodeId != req.NodeId {
 			peerList = append(peerList, node)
 		}
 	}
-	s.mu.Unlock()
+	s.mu.RUnlock()
 
 	log.Printf("[DISCOVERY] Node %s requested peers. Returning %d peers.\n", req.NodeId, len(peerList))
 
@@ -135,11 +149,12 @@ func (s *registryServer) UnregisterNode(ctx context.Context, req *pb.NodeInfo) (
 	}, nil
 }
 
-
 func raiseRequiredNodes(required int) {
 	local := utils.GetFullLocalAdress()
 
 	clientNumber := required
+
+	peersRequired := required - 1
 
 	for range clientNumber {
 
@@ -149,7 +164,7 @@ func raiseRequiredNodes(required int) {
 			{Key: "TRAINING_NODES", Value: strconv.Itoa(clientNumber)},
 			{Key: "PORT", Value: "50051"},
 			{Key: "TOTAL_ROUNDS", Value: "3"},
-			{Key: "NUM_PEERS_REQUIRED", Value: "4"},
+			{Key: "NUM_PEERS_REQUIRED", Value: strconv.Itoa(peersRequired)},
 			{Key: "MAX_DISCOVERY_RETRIES", Value: "5"},
 			{Key: "WEIGHT_WAIT_TIMEOUT_SECONDS", Value: "30"},
 			{Key: "REGISTRY_ADRESS", Value: local},
@@ -189,8 +204,8 @@ func main() {
 	// 4. Register our server with the gRPC framework
 	pb.RegisterRegistryServiceServer(grpcServer, myServer)
 
-	// Raise 1 node to start the training
-	raiseRequiredNodes(1)
+	// Raise the N nodes to start the training
+	raiseRequiredNodes(5)
 
 	// 5. Start serving incoming requests
 	log.Printf("[INFO] Go Service Registry is running and listening on port %s...\n", port)
