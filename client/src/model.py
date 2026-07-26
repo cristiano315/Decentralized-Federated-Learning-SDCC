@@ -127,7 +127,7 @@ class SentimentPyTorch(nn.Module):
 
         # Early Stopping Variables
         patience = 4
-        max_epochs = 30
+        max_epochs = 5 #changed to 5 for testing, can be increased to 10 or more
         best_val_loss = float('inf')
         epochs_without_improvement = 0
         best_model_state = None
