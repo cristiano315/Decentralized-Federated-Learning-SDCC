@@ -23,7 +23,7 @@ class RegistryClient:
         """
         Registers this node with the central Go Service Registry.
         """
-        print(f"DEBUG ip:{my_ip}, with type: {type(my_ip)}, port: {my_port}, with type: {type(my_port)}")
+        print(f"DEBUG ip:{my_ip}, with type: {type(my_ip)}, port: {my_port}, with type: {type(my_port)}. Registry address: {self.registry_address}, with type: {type(self.registry_address)}")
         try:
             with grpc.insecure_channel(self.registry_address) as channel:
                 stub = federated_pb2_grpc.RegistryServiceStub(channel)

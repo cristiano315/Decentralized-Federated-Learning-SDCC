@@ -90,7 +90,7 @@ def main():
     
     if not registry_client.register_node(MY_IP, MY_PORT):
         print("Fatal error: Could not connect to Registry. Exiting.")
-        # return UNCOMMENT WHEN NOT TESTING
+        return
     
     # ==========================================
     # 4. Start gRPC server
@@ -110,7 +110,7 @@ def main():
             break 
         print(f"[Discovery] Fetching peers from Registry... (Attempt {retries + 1}/{MAX_DISCOVERY_RETRIES})")
         peers = registry_client.get_peer_list(node_request_count=NUM_PEERS_REQUIRED)
-        if len(peers) < NUM_PEERS_REQUIRED:
+        if len(peers) < NUM_PEERS_REQUIRED - 1:
             time.sleep(5)
             retries += 1
     

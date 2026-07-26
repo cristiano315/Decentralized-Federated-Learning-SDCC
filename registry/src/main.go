@@ -18,7 +18,6 @@ import (
 	"google.golang.org/grpc"
 )
 
-
 // =====================================================================
 // SERVER STRUCT
 // =====================================================================
@@ -91,15 +90,16 @@ func (s *registryServer) RegisterNode(ctx context.Context, req *pb.NodeInfo) (*p
 func (s *registryServer) DiscoverNodes(ctx context.Context, req *pb.DiscoverRequest) (*pb.DiscoverResponse, error) {
 	// Read-Lock the map (multiple clients can read simultaneously without blocking each other)
 	s.mu.RLock()
-	defer s.mu.RUnlock()
+	currentNodesLen := len(s.nodes)
+    currentPending := s.pendingNodes
+	s.mu.RUnlock()
 
-	var peerList []*pb.NodeInfo
 	requiredPeers := int(req.RequestCount)
 
 	// Check if there are enough registered nodes, if not, create them
-	if requiredPeers > len(s.nodes) + s.pendingNodes { 
+	if requiredPeers > currentNodesLen + currentPending { 
 		// Check if there are enough nodes in DynamoDB
-		dynamoNodes := len(s.nodes)      //CHANGE WITH DYNAMODB CALL
+		dynamoNodes := currentNodesLen      //CHANGE WITH DYNAMODB CALL
 		if dynamoNodes < requiredPeers { // Not enough nodes in DynamoDB either
 			s.raiseRequiredNodes(requiredPeers - dynamoNodes)
 		} else {
@@ -113,6 +113,7 @@ func (s *registryServer) DiscoverNodes(ctx context.Context, req *pb.DiscoverRequ
 	s.WaitNodes(requiredPeers) // Wait until enough nodes are registered
 
 	//Read-lock ONLY for reading the map
+	var peerList []*pb.NodeInfo
 	s.mu.RLock()
 	for _, node := range s.nodes {
 		// Do not include the node that made the request in the returned peer list
@@ -154,10 +155,11 @@ func (s *registryServer) raiseRequiredNodes(required int) {
 
 	clientNumber := required
 
-	peersRequired := required - 1
+	peersRequired := 5
 
 	for range clientNumber {
 
+		s.mu.Lock()
 		s.currentClientID++
 		env := []utils.EnvVar{
 			{Key: "CLIENT_ID", Value: strconv.Itoa(s.currentClientID)},
@@ -175,6 +177,7 @@ func (s *registryServer) raiseRequiredNodes(required int) {
 			fmt.Printf("AWS Error: %s\n", err.Error())
 		}
 		s.pendingNodes += 1
+		s.mu.Unlock()
 
 	}
 
@@ -207,7 +210,7 @@ func main() {
 	pb.RegisterRegistryServiceServer(grpcServer, myServer)
 
 	// Raise the N nodes to start the training
-	myServer.raiseRequiredNodes(5)
+	myServer.raiseRequiredNodes(1)
 
 	// 5. Start serving incoming requests
 	log.Printf("[INFO] Go Service Registry is running and listening on port %s...\n", port)
