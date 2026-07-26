@@ -97,7 +97,7 @@ class FederatedNodeServicer(federated_pb2_grpc.FederatedNodeServicer):
     """
     def __init__(self, my_id):
         self.my_id = my_id
-        self.received_weights = []
+        self.received_weights = {}
         self.seen_messages = set()
         self.lock = threading.Lock()
         self.peers = []
@@ -112,15 +112,19 @@ class FederatedNodeServicer(federated_pb2_grpc.FederatedNodeServicer):
         with self.lock:
             if msg_id in self.seen_messages:
                 # Ignore msg to avoid loops
-                return federated_pb2.Empty()
+                return federated_pb2.Ack(success=True, message="Message already seen")
             
             self.seen_messages.add(msg_id)
-            self.received_weights.append(request)
+
+            rnd = request.round_number
+            if rnd not in self.received_weights:
+                self.received_weights[rnd] = []
+            self.received_weights[rnd].append(request)
             
         # Forward the gossip to a subset of peers in a separate thread to avoid blocking
         threading.Thread(target=self._forward_gossip, args=(request,)).start()
         
-        return federated_pb2.Empty()
+        return federated_pb2.Ack(success=True, message="Weights successfully received")
 
     def _forward_gossip(self, request):
         # Exclude self and sender

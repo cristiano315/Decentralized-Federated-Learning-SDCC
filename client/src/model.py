@@ -66,16 +66,28 @@ class SentimentPyTorch(nn.Module):
                 labels.append(1 if label == 4 else label)
 
         # ---------------------------------------------------------
-        # RIMUOVI RIMOUVI RIMOUVI
-        # RIDUZIONE AL 10% DEL DATASET (Prima della tokenizzazione)
+        # SELEZIONE DEL DATASET CIRCOLARE BASATA SUL CLIENT ID
         # ---------------------------------------------------------
-        percentage = 0.016
+        client_id = int(os.getenv("CLIENT_ID", 1))
+        samples_per_client = 500
         total_original = len(texts)
-        texts, _, labels, _ = train_test_split(
-            texts, labels, train_size=percentage, random_state=seed
-        )
-        print(f"[Data Prep] Dataset ridotto al {percentage*100}%: da {total_original} a {len(texts)} campioni totali.")
-        # FINE RIMUOVI --------------
+
+        # Usiamo il modulo % per far ripartire gli indici dall'inizio se superano il totale
+        start_idx = ((client_id - 1) * samples_per_client) % total_original
+        end_idx = start_idx + samples_per_client
+
+        # Taglio circolare nel caso in cui il blocco superi la fine della lista
+        if end_idx <= total_original:
+            texts = texts[start_idx:end_idx]
+            labels = labels[start_idx:end_idx]
+        else:
+            # Prende la parte finale e la unisce con la parte iniziale
+            remainder = end_idx - total_original
+            texts = texts[start_idx:] + texts[:remainder]
+            labels = labels[start_idx:] + labels[:remainder]
+
+        print(f"[Data Prep] Client {client_id}: estratti {len(texts)} campioni (Start index: {start_idx}).")
+        # ---------------------------------------------------------
         print("[Data Prep] Tokenizing with DistilBERT...")
         tokenizer = DistilBertTokenizer.from_pretrained('distilbert-base-uncased')
 

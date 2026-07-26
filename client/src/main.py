@@ -165,26 +165,33 @@ def main():
                 send_weights_to_peer(peer['ip'], peer['port'], payload)
                 print(f"sent {len(payload_bytes)} bytes") 
 
-            # D. Wait for Incoming Weights
-            print("[Wait] Waiting to receive weights from peers...")
+            # D. Wait for Incoming Weights for the current round_num
+            print(f"[Wait] Waiting to receive weights for round {round_num + 1}...")
             start_wait_time = time.time()
-            while len(servicer.received_weights) < len(peers):
-                elapsed_time = time.time() - start_wait_time
-                if elapsed_time > WEIGHT_WAIT_TIMEOUT_SECONDS:
-                    print(f"[Warning] Timeout! Proceeding with {len(servicer.received_weights)} received models.")
-                    break               
+
+            while True:
+                with servicer.lock:
+                    current_round_weights = servicer.received_weights.get(round_num, [])
+                    if len(current_round_weights) >= len(peers):
+                        break
+
+                if time.time() - start_wait_time > WEIGHT_WAIT_TIMEOUT_SECONDS:
+                    print(f"[Warning] Timeout! Proceeding with {len(current_round_weights)} received models.")
+                    break
                 time.sleep(0.5)
                 
-            print(f"[Info] Received {len(servicer.received_weights)} models.")
+            # print(f"[Info] Received {len(servicer.received_weights)} models.")
             
             # E. Aggregation
             print("[Aggregate] Running FedAvg...")
 
+            with servicer.lock:
+                round_payloads = servicer.received_weights.get(round_num, [])
+
             deserialized_models = []
             # Deserialize received weights and prepare for aggregation
-            for request in servicer.received_weights:
+            for request in round_payloads:
                 state_dict = load_weights_from_bytes(request.model_weights)
-                
                 deserialized_models.append({
                     'weights': state_dict,
                     'num_samples': request.num_samples
@@ -198,7 +205,10 @@ def main():
     except KeyboardInterrupt:
         print("\n[Shutdown] Training interrupted by user.")
     finally:
-        # Graceful Shutdown
+        # Keep server running briefly so remaining nodes can still fetch weights
+        print("[Shutdown] Waiting for network to complete rounds...")
+        time.sleep(60) # Keep gRPC server alive for lagging peers
+        
         print("[Shutdown] Stopping background gRPC server...")
         server.stop(grace=0)
         registry_client.unregister_node(MY_IP, MY_PORT)
