@@ -78,7 +78,7 @@ func (s *registryServer) RegisterNode(ctx context.Context, req *pb.NodeInfo) (*p
 		}, nil
 	}
 
-	log.Printf("[REGISTER] Node joined: %s at %s:%d\n", req.NodeId, req.IpAddress, req.Port)
+	log.Printf("[REGISTER] Node joined: %s at %s:%d and added to DynamoDB\n ", req.NodeId, req.IpAddress, req.Port)
 
 	return &pb.RegisterResponse{
 		Success: true,
@@ -99,11 +99,19 @@ func (s *registryServer) DiscoverNodes(ctx context.Context, req *pb.DiscoverRequ
 	// Check if there are enough registered nodes, if not, create them
 	if requiredPeers > currentNodesLen + currentPending { 
 		// Check if there are enough nodes in DynamoDB
-		dynamoNodes := currentNodesLen      //CHANGE WITH DYNAMODB CALL
-		if dynamoNodes < requiredPeers { // Not enough nodes in DynamoDB either
-			s.raiseRequiredNodes(requiredPeers - dynamoNodes)
+		dynamoNodes, err := utils.FetchActiveNodes()      //CHANGE WITH DYNAMODB CALL
+		if err != nil {
+			log.Printf("[ERROR] Error fetching active nodes from DynamoDB: %v", err)
+			return nil, fmt.Errorf("failed to fetch active nodes from DynamoDB")
+		}
+		if len(dynamoNodes) < requiredPeers { // Not enough nodes in DynamoDB either
+			s.raiseRequiredNodes(requiredPeers - len(dynamoNodes))
 		} else {
-			// GET REQUIRED NODES FROM DYNAMODB, ADD THEM TO THE LIST AND RETURN THEM
+			for _, node := range dynamoNodes {
+				s.mu.Lock()
+				s.nodes[node.NodeId] = node
+				s.mu.Unlock()
+			}
 			// REMEMBER TO PING THEM USING THE PING RPC TO CHECK IF THEY ARE ALIVE BEFORE RETURNING THEM
 		}
 	}
@@ -141,6 +149,12 @@ func (s *registryServer) UnregisterNode(ctx context.Context, req *pb.NodeInfo) (
 	delete(s.nodes, req.NodeId)
 
 	// Remove the node from dynamoDB and destroy it. NOT NECESSARY TO DESTROY IT IF NOT LEFT ON WAIT.
+	err := utils.RemoveNode(req.NodeId)
+	if err != nil {
+		log.Printf("[ERROR] Error removing node %s from DynamoDB: %v", req.NodeId, err)
+	} else {
+		log.Printf("[INFO] Node %s removed from DynamoDB.", req.NodeId)
+	}
 
 	log.Printf("[UNREGISTER] Node left: %s at %s:%d\n", req.NodeId, req.IpAddress, req.Port)
 

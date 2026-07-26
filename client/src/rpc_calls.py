@@ -120,6 +120,7 @@ class FederatedNodeServicer(federated_pb2_grpc.FederatedNodeServicer):
             if rnd not in self.received_weights:
                 self.received_weights[rnd] = []
             self.received_weights[rnd].append(request)
+            print(f"[Gossip] Received weights from {request.sender_id} with size {len(request.model_weights)} bytes for round {rnd}. Total received for this round: {len(self.received_weights[rnd])}")
             
         # Forward the gossip to a subset of peers in a separate thread to avoid blocking
         threading.Thread(target=self._forward_gossip, args=(request,)).start()
@@ -142,23 +143,25 @@ class FederatedNodeServicer(federated_pb2_grpc.FederatedNodeServicer):
         for peer in selected_peers:
             try:
                 # Forward the same identical payload (maintains the original sender_id)
-                send_weights_to_peer(peer['ip'], peer['port'], request)
+                print(f"[Gossip] Forwarding weights to {peer['id']}...")
+                send_weights_to_peer(peer['ip'], peer['port'], peer['id'], request)
             except Exception as e:
                 print(f"[Gossip] Error forwarding to {peer['id']}: {e}")
 
 
 
-def send_weights_to_peer(peer_ip: str, peer_port: int, payload: federated_pb2.WeightPayload):
+def send_weights_to_peer(peer_ip: str, peer_port: int, peer_id: str, payload: federated_pb2.WeightPayload):
     """
     Client-side gossip function: Sends local weights to a specific peer.
     """
-    print(f"[RPC] Sending weights with size: {len(payload.model_weights)} bytes to peer at {peer_ip}:{peer_port}...")
+    print(f"[RPC] Sending weights with size: {len(payload.model_weights)} bytes to peer with id {peer_id} at {peer_ip}:{peer_port}...")
     peer_address = f"{peer_ip}:{peer_port}"
     try:
         with grpc.insecure_channel(peer_address) as channel:
             stub = federated_pb2_grpc.FederatedNodeStub(channel)
             # Send the RPC call
             stub.SendWeights(payload)
+            print(f"[RPC] Sent {len(payload.model_weights)} bytes to peer {peer_id}")
     except grpc.RpcError as e:
         # To add logging for CloudWatch
         print(f"Failed to send weights to {peer_address}: {e.code()}")

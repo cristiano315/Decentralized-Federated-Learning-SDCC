@@ -103,14 +103,14 @@ def main():
     peers = []
     retries = 0
 
-    while len(peers) < NUM_PEERS_REQUIRED:
+    while len(peers) < (NUM_PEERS_REQUIRED - 1):
         if retries >= MAX_DISCOVERY_RETRIES:
             print("[Error] Discovery timeout reached. Not enough peers.")
             server.stop(grace=0)
             break 
         print(f"[Discovery] Fetching peers from Registry... (Attempt {retries + 1}/{MAX_DISCOVERY_RETRIES})")
         peers = registry_client.get_peer_list(node_request_count=NUM_PEERS_REQUIRED)
-        if len(peers) < NUM_PEERS_REQUIRED - 1:
+        if len(peers) < (NUM_PEERS_REQUIRED - 1):
             time.sleep(5)
             retries += 1
     
@@ -155,15 +155,13 @@ def main():
             initial_gossip_peers = random.sample(peers, actual_k)
             
             for peer in initial_gossip_peers:
-                print(f"[Gossip] Sending weights to {peer['id']}...")
                 payload = federated_pb2.WeightPayload(
                     sender_id=MY_ID,
                     round_number=round_num,
                     model_weights=payload_bytes,
                     num_samples=my_samples
                 )
-                send_weights_to_peer(peer['ip'], peer['port'], payload)
-                print(f"sent {len(payload_bytes)} bytes") 
+                send_weights_to_peer(peer['ip'], peer['port'], peer['id'], payload)
 
             # D. Wait for Incoming Weights for the current round_num
             print(f"[Wait] Waiting to receive weights for round {round_num + 1}...")
@@ -180,7 +178,7 @@ def main():
                     break
                 time.sleep(0.5)
                 
-            # print(f"[Info] Received {len(servicer.received_weights)} models.")
+            print(f"[Info] Received {len(servicer.received_weights)} models.")
             
             # E. Aggregation
             print("[Aggregate] Running FedAvg...")
