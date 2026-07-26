@@ -18,7 +18,6 @@ import (
 	"google.golang.org/grpc"
 )
 
-var currentClientID = 0
 
 // =====================================================================
 // SERVER STRUCT
@@ -37,6 +36,10 @@ type registryServer struct {
 	nodes map[string]*pb.NodeInfo
 
 	cond *sync.Cond
+
+	currentClientID int
+
+	pendingNodes int
 }
 
 // =====================================================================
@@ -63,6 +66,7 @@ func (s *registryServer) RegisterNode(ctx context.Context, req *pb.NodeInfo) (*p
 
 	// Store the node information in the map
 	s.nodes[req.NodeId] = req
+	s.pendingNodes -= 1
 
 	//call aws dynamodb to store node
 	err := utils.AddNode(req)
@@ -85,29 +89,25 @@ func (s *registryServer) RegisterNode(ctx context.Context, req *pb.NodeInfo) (*p
 
 // Discover handles requests from nodes asking for the list of peers.
 func (s *registryServer) DiscoverNodes(ctx context.Context, req *pb.DiscoverRequest) (*pb.DiscoverResponse, error) {
-	/*
-		// Read-Lock the map (multiple clients can read simultaneously without blocking each other)
-		s.mu.RLock()
-		defer s.mu.RUnlock()
-	*/
+	// Read-Lock the map (multiple clients can read simultaneously without blocking each other)
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
 	var peerList []*pb.NodeInfo
 	requiredPeers := int(req.RequestCount)
 
-	/*
-		LOGIC REQUIREDNODES CAUSES ENDLESS LOOP, WAIT FOR THE NODES BOOTING
-		// Check if there are enough registered nodes, if not, create them
-		if requiredPeers > len(s.nodes) {
-			// Check if there are enough nodes in DynamoDB
-			dynamoNodes := len(s.nodes)      //CHANGE WITH DYNAMODB CALL
-			if dynamoNodes < requiredPeers { // Not enough nodes in DynamoDB either
-				raiseRequiredNodes(requiredPeers - dynamoNodes)
-			} else {
-				// GET REQUIRED NODES FROM DYNAMODB, ADD THEM TO THE LIST AND RETURN THEM
-				// REMEMBER TO PING THEM USING THE PING RPC TO CHECK IF THEY ARE ALIVE BEFORE RETURNING THEM
-			}
+	// Check if there are enough registered nodes, if not, create them
+	if requiredPeers > len(s.nodes) + s.pendingNodes { 
+		// Check if there are enough nodes in DynamoDB
+		dynamoNodes := len(s.nodes)      //CHANGE WITH DYNAMODB CALL
+		if dynamoNodes < requiredPeers { // Not enough nodes in DynamoDB either
+			s.raiseRequiredNodes(requiredPeers - dynamoNodes)
+		} else {
+			// GET REQUIRED NODES FROM DYNAMODB, ADD THEM TO THE LIST AND RETURN THEM
+			// REMEMBER TO PING THEM USING THE PING RPC TO CHECK IF THEY ARE ALIVE BEFORE RETURNING THEM
 		}
-	*/
+	}
+
 
 	//  Wait until enough nodes are registered (WaitNodes handles its own locks)
 	s.WaitNodes(requiredPeers) // Wait until enough nodes are registered
@@ -149,7 +149,7 @@ func (s *registryServer) UnregisterNode(ctx context.Context, req *pb.NodeInfo) (
 	}, nil
 }
 
-func raiseRequiredNodes(required int) {
+func (s *registryServer) raiseRequiredNodes(required int) {
 	local := utils.GetFullLocalAdress()
 
 	clientNumber := required
@@ -158,9 +158,9 @@ func raiseRequiredNodes(required int) {
 
 	for range clientNumber {
 
-		currentClientID++
+		s.currentClientID++
 		env := []utils.EnvVar{
-			{Key: "CLIENT_ID", Value: strconv.Itoa(currentClientID)},
+			{Key: "CLIENT_ID", Value: strconv.Itoa(s.currentClientID)},
 			{Key: "TRAINING_NODES", Value: strconv.Itoa(clientNumber)},
 			{Key: "PORT", Value: "50051"},
 			{Key: "TOTAL_ROUNDS", Value: "3"},
@@ -174,6 +174,8 @@ func raiseRequiredNodes(required int) {
 		if err != nil {
 			fmt.Printf("AWS Error: %s\n", err.Error())
 		}
+		s.pendingNodes += 1
+
 	}
 
 	fmt.Printf("Raised required nodes to %d\n", required)
@@ -205,7 +207,7 @@ func main() {
 	pb.RegisterRegistryServiceServer(grpcServer, myServer)
 
 	// Raise the N nodes to start the training
-	raiseRequiredNodes(5)
+	myServer.raiseRequiredNodes(5)
 
 	// 5. Start serving incoming requests
 	log.Printf("[INFO] Go Service Registry is running and listening on port %s...\n", port)
