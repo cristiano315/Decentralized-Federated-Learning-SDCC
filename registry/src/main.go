@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"sync"
+	"time"
 
 	"strconv"
 
@@ -16,6 +17,7 @@ import (
 	utils "federate-registry/utils"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 // =====================================================================
@@ -95,32 +97,67 @@ func (s *registryServer) DiscoverNodes(ctx context.Context, req *pb.DiscoverRequ
 	s.mu.RUnlock()
 
 	requiredPeers := int(req.RequestCount)
+	missing := requiredPeers - (currentNodesLen + currentPending)
 
 	// Check if there are enough registered nodes, if not, create them
-	if requiredPeers > currentNodesLen + currentPending { 
+	if missing > 0 { 
 		// Check if there are enough nodes in DynamoDB
-		dynamoNodes, err := utils.FetchActiveNodes()      //CHANGE WITH DYNAMODB CALL
+		dynamoNodes, err := utils.FetchActiveNodes()
 		if err != nil {
 			log.Printf("[ERROR] Error fetching active nodes from DynamoDB: %v", err)
 			return nil, fmt.Errorf("failed to fetch active nodes from DynamoDB")
 		}
-		if len(dynamoNodes) < requiredPeers { // Not enough nodes in DynamoDB either
-			s.raiseRequiredNodes(requiredPeers - len(dynamoNodes))
-		} else {
-			for _, node := range dynamoNodes {
-				s.mu.Lock()
-				s.nodes[node.NodeId] = node
-				s.mu.Unlock()
+
+		// Filter out dead nodes from the fetched list and remove them from DynamoDB. Parallel ping
+		var newlyDiscovered []*pb.NodeInfo
+		var wg sync.WaitGroup
+		var aliveMu sync.Mutex
+
+		for _, node := range dynamoNodes {
+			// If node already in memory skip ping
+			s.mu.RLock()
+			_, alreadyInMem := s.nodes[node.NodeId]
+			s.mu.RUnlock()
+
+			if alreadyInMem {
+				continue
 			}
-			// REMEMBER TO PING THEM USING THE PING RPC TO CHECK IF THEY ARE ALIVE BEFORE RETURNING THEM
+
+			wg.Add(1)
+			go func(n *pb.NodeInfo) {
+				defer wg.Done()
+				if pingNode(n) {
+					aliveMu.Lock()
+					newlyDiscovered = append(newlyDiscovered, n)
+					aliveMu.Unlock()
+				} else {
+					log.Printf("[DISCOVERY] Node %s unreacheable. Ignoring and removing from DynamoDB.", n.NodeId)
+					utils.RemoveNode(n.NodeId)
+				}
+			}(node)
+		}
+
+		// Wait for all pings to finish
+		wg.Wait()
+
+        // Add the newly discovered nodes to the in-memory map and update the count of missing nodes
+		s.mu.Lock()
+		for _, node := range newlyDiscovered {
+			s.nodes[node.NodeId] = node
+		}
+		missingNow := requiredPeers - (len(s.nodes) + s.pendingNodes)
+		s.mu.Unlock()
+
+		// If there are still missing nodes after checking DynamoDB, raise them
+		if missingNow > 0 {
+			s.raiseRequiredNodes(missingNow)
 		}
 	}
 
+	// Wait until enough nodes are registered (WaitNodes handles its own locks)
+	s.WaitNodes(requiredPeers) 
 
-	//  Wait until enough nodes are registered (WaitNodes handles its own locks)
-	s.WaitNodes(requiredPeers) // Wait until enough nodes are registered
-
-	//Read-lock ONLY for reading the map
+	// Read-Lock the map again to prepare the peer list
 	var peerList []*pb.NodeInfo
 	s.mu.RLock()
 	for _, node := range s.nodes {
@@ -131,7 +168,7 @@ func (s *registryServer) DiscoverNodes(ctx context.Context, req *pb.DiscoverRequ
 	}
 	s.mu.RUnlock()
 
-	log.Printf("[DISCOVERY] Node %s requested peers. Returning %d peers.\n", req.NodeId, len(peerList))
+	log.Printf("[DISCOVERY] Node %s requested peers. Returning %d peers.", req.NodeId, len(peerList))
 
 	return &pb.DiscoverResponse{
 		Nodes: peerList,
@@ -196,6 +233,34 @@ func (s *registryServer) raiseRequiredNodes(required int) {
 	}
 
 	fmt.Printf("Raised required nodes to %d\n", required)
+}
+
+func pingNode(node *pb.NodeInfo) bool {
+	address := fmt.Sprintf("%s:%d", node.IpAddress, node.Port)
+
+	conn, err := grpc.NewClient(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return false
+	}
+	defer conn.Close()
+
+	client := pb.NewFederatedNodeClient(conn)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	req := &pb.NodeInfo{
+		NodeId:    node.NodeId,
+		IpAddress: node.IpAddress,
+		Port:      node.Port,
+	}
+
+	resp, err := client.Ping(ctx, req)
+	if err != nil {
+		return false
+	}
+
+	return resp.Success
 }
 
 // =====================================================================
