@@ -93,14 +93,14 @@ func (s *registryServer) DiscoverNodes(ctx context.Context, req *pb.DiscoverRequ
 	// Read-Lock the map (multiple clients can read simultaneously without blocking each other)
 	s.mu.RLock()
 	currentNodesLen := len(s.nodes)
-    currentPending := s.pendingNodes
+	currentPending := s.pendingNodes
 	s.mu.RUnlock()
 
 	requiredPeers := int(req.RequestCount)
 	missing := requiredPeers - (currentNodesLen + currentPending)
 
 	// Check if there are enough registered nodes, if not, create them
-	if missing > 0 { 
+	if missing > 0 {
 		// Check if there are enough nodes in DynamoDB
 		dynamoNodes, err := utils.FetchActiveNodes()
 		if err != nil {
@@ -140,7 +140,7 @@ func (s *registryServer) DiscoverNodes(ctx context.Context, req *pb.DiscoverRequ
 		// Wait for all pings to finish
 		wg.Wait()
 
-        // Add the newly discovered nodes to the in-memory map and update the count of missing nodes
+		// Add the newly discovered nodes to the in-memory map and update the count of missing nodes
 		s.mu.Lock()
 		for _, node := range newlyDiscovered {
 			s.nodes[node.NodeId] = node
@@ -155,7 +155,7 @@ func (s *registryServer) DiscoverNodes(ctx context.Context, req *pb.DiscoverRequ
 	}
 
 	// Wait until enough nodes are registered (WaitNodes handles its own locks)
-	s.WaitNodes(requiredPeers) 
+	s.WaitNodes(requiredPeers)
 
 	// Read-Lock the map again to prepare the peer list
 	var peerList []*pb.NodeInfo
@@ -219,7 +219,7 @@ func (s *registryServer) raiseRequiredNodes(required int) {
 			{Key: "TOTAL_ROUNDS", Value: "3"},
 			{Key: "NUM_PEERS_REQUIRED", Value: strconv.Itoa(peersRequired)},
 			{Key: "MAX_DISCOVERY_RETRIES", Value: "5"},
-			{Key: "WEIGHT_WAIT_TIMEOUT_SECONDS", Value: "30"},
+			{Key: "WEIGHT_WAIT_TIMEOUT_SECONDS", Value: "1200"},
 			{Key: "REGISTRY_ADRESS", Value: local},
 		}
 

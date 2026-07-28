@@ -183,6 +183,7 @@ class SentimentPyTorch(nn.Module):
             
             print(f"Epoch {epoch+1:02d} | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f} | Val Acc: {val_acc:.4f}")
 
+            '''
             # Early Stopping Logic
             if avg_val_loss < best_val_loss:
                 best_val_loss = avg_val_loss
@@ -196,5 +197,6 @@ class SentimentPyTorch(nn.Module):
                 print(f"Early stopping triggered at epoch {epoch+1}.")
                 model.load_state_dict(best_model_state)
                 break
+            '''
 
         return model, num_training_samples
