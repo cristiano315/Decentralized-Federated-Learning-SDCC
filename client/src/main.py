@@ -17,7 +17,7 @@ import federated_pb2_grpc as federated_pb2_grpc
 
 from model import SentimentPyTorch
 from aggregator import apply_fedavg
-from utils import calculate_k, get_weights_as_bytes, load_weights_from_bytes
+from utils import calculate_k, get_weights_as_bytes, load_weights_from_bytes, get_model_hash
 
 def start_grpc_server(port: int, my_id: str) -> tuple:
     """
@@ -80,6 +80,8 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"[Init] Initializing global model on {device}...")
     
+    seed = 42
+    torch.manual_seed(seed)
     global_model = SentimentPyTorch(num_class=2)
     global_model.to(device)
 
@@ -134,7 +136,7 @@ def main():
     # ==========================================
     try:
         for round_num in range(TOTAL_ROUNDS):
-            print(f"\n{'='*30}\n ROUND {round_num + 1}\n{'='*30}")
+            print(f"\n{'='*10} ROUND {round_num + 1} {'='*10}")
             
             # A. Local Training (Updating the global_model)
             print("[Train] Training model on local dataset...")
@@ -148,7 +150,7 @@ def main():
                 Y_val=Y_val, 
                 device=device
             )
-            
+
             # B. Serialize Weights for Gossip
             print("[Serialize] Converting model weights to bytes...")
             payload_bytes = get_weights_as_bytes(global_model)
@@ -184,27 +186,34 @@ def main():
                     break
                 time.sleep(0.5)
                 
-            print(f"[Info] Received {len(servicer.received_weights)} models.")
-            
             # E. Aggregation
-            print("[Aggregate] Running FedAvg...")
-
             with servicer.lock:
                 round_payloads = servicer.received_weights.get(round_num, [])
+
+            round_payloads.sort(key=lambda x: x.sender_id)
+            
+            print(f"[Aggregate] Running FedAvg on {len(round_payloads)} peer models...")
 
             deserialized_models = []
             # Deserialize received weights and prepare for aggregation
             for request in round_payloads:
                 state_dict = load_weights_from_bytes(request.model_weights)
                 deserialized_models.append({
+                    'sender_id': request.sender_id,
                     'weights': state_dict,
                     'num_samples': request.num_samples
                 })
+            
+            fc_hash = get_model_hash(global_model, only_trainable=True)
+            print(f"[VERIFICATION] PRIMA DI FEDAVG round {round_num} Model Classifier SHA-256: {fc_hash}")
 
-            global_model = apply_fedavg(global_model, deserialized_models, my_samples)
+            global_model = apply_fedavg(global_model, deserialized_models, my_samples, MY_ID)
             
             # F. Clear Buffer for the next round
             servicer.received_weights.clear()
+
+            fc_hash = get_model_hash(global_model, only_trainable=True)
+            print(f"[VERIFICATION] DOPO FEDAVG round {round_num} Model Classifier SHA-256: {fc_hash}")
 
     except KeyboardInterrupt:
         print("\n[Shutdown] Training interrupted by user.")
@@ -219,6 +228,20 @@ def main():
         print("Done.")
 
     print("TRAINING HAS BEEN COMPLETED.")
+
+    # ==========================================
+    # 7. Verification / Print Model Hash
+    # ==========================================
+    # Hash dei soli pesi addestrati (es. il classificatore)
+    fc_hash = get_model_hash(global_model, only_trainable=True)
+
+    # Hash di tutti i parametri del modello
+    full_hash = get_model_hash(global_model, only_trainable=False)
+
+    print("\n" + "="*10)
+    print(f"[VERIFICATION] Final Model Classifier SHA-256: {fc_hash}")
+    print(f"[VERIFICATION] Final Model Full SHA-256:       {full_hash}")
+    print("="*10 + "\n")
     
 if __name__ == "__main__":
     main()

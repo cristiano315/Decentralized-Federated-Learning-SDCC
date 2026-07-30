@@ -1,4 +1,5 @@
 #File for utility functions
+import hashlib
 import io
 import math
 import torch
@@ -36,3 +37,21 @@ def calculate_k(num_peers):
     k = math.ceil(math.log(N)) + c
     return k
     
+#hash
+def get_model_hash(model: torch.nn.Module, only_trainable: bool = True) -> str:
+    """
+    Calcola l'hash SHA-256 degli state_dict del modello PyTorch.
+    - only_trainable=True: calcola l'hash solo dei parametri addestrati (es. 'fc.').
+    - only_trainable=False: calcola l'hash di TUTTI i pesi del modello.
+    """
+    buffer = io.BytesIO()
+    state_dict = model.state_dict()
+    
+    if only_trainable:
+        # Considera solo la testa di classificazione (FC)
+        state_dict = {k: v.cpu() for k, v in state_dict.items() if k.startswith('fc.')}
+    else:
+        state_dict = {k: v.cpu() for k, v in state_dict.items()}
+
+    torch.save(state_dict, buffer)
+    return hashlib.sha256(buffer.getvalue()).hexdigest()
