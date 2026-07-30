@@ -221,6 +221,7 @@ func (s *registryServer) raiseRequiredNodes(required int) {
 			{Key: "MAX_DISCOVERY_RETRIES", Value: "5"},
 			{Key: "WEIGHT_WAIT_TIMEOUT_SECONDS", Value: "30"},
 			{Key: "REGISTRY_ADRESS", Value: local},
+			{Key: "RESPAWNED", Value: "False"},
 		}
 
 		err := utils.LaunchTask("federated_cluster", "client_task", 1, "client_container", env)

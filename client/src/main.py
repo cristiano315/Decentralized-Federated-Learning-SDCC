@@ -63,6 +63,7 @@ def main():
     NUM_PEERS_REQUIRED = int(os.getenv("NUM_PEERS_REQUIRED", TRAINING_NODES - 1)) # to exclude self node
     MAX_DISCOVERY_RETRIES = int(os.getenv("MAX_DISCOVERY_RETRIES", 5))
     WEIGHT_WAIT_TIMEOUT_SECONDS = int(os.getenv("WEIGHT_WAIT_TIMEOUT_SECONDS", 30))
+    RESPAWNED = os.getenv("RESPAWNED", "False").lower() == "true"
     
     print("Client is running.")
 
@@ -122,6 +123,11 @@ def main():
 
     servicer.peers = peers
     servicer.fanout = k
+
+    # if RESPAWNED:
+        # prendo i pesi
+        # faccio fedavfg
+        # setto start_round = round_num + 1
     
     # ==========================================
     # 6. Training loop

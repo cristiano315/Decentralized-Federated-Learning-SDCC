@@ -165,3 +165,4 @@ def send_weights_to_peer(peer_ip: str, peer_port: int, peer_id: str, payload: fe
     except grpc.RpcError as e:
         # To add logging for CloudWatch
         print(f"Failed to send weights to {peer_address}: {e.code()}")
+        # avvisa che e morto, cosi che il registry lo rimuove e ne crea un altro
