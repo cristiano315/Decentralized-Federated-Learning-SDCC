@@ -1,7 +1,7 @@
 import torch
 import copy
 
-def apply_fedavg(global_model, received_payloads, local_samples, my_id):
+def apply_fedavg(global_model, received_payloads):
     """
     Applies the Federated Averaging algorithm, including the local model.
         Args:
@@ -10,16 +10,9 @@ def apply_fedavg(global_model, received_payloads, local_samples, my_id):
         local_samples: Number of samples the local model was trained on.
         my_id: The ID of the current client to ensure deterministic sorting.
     """
-    # 1. Start the list with our OWN local model's classification head
-    local_fc_only = {k: v.cpu() for k, v in global_model.state_dict().items() if k.startswith('fc.')}
-    
-    weights_list = [{
-        'sender_id': my_id, 
-        'state_dict': copy.deepcopy(local_fc_only),
-        'num_samples': local_samples
-    }]
     
     # 2. Add all received peer models
+    weights_list = []
     for payload in received_payloads:
         weights_list.append({
             'sender_id': payload['sender_id'],

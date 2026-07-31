@@ -96,12 +96,15 @@ class FederatedNodeServicer(federated_pb2_grpc.FederatedNodeServicer):
     Listens for incoming weights from peers in the decentralized network.
     """
     def __init__(self, my_id):
-        self.my_id = my_id
+        self.my_id = my_id #set up at start of main.py
         self.received_weights = {}
         self.seen_messages = set()
         self.lock = threading.Lock()
         self.peers = []
         self.fanout = 2  # Number of peers to forward the message to for every gossip hop
+        self.latest_local_weights = None # set up after every local_train in main.py
+        self.num_samples = 0 # set up after defining servicer in main.py
+        self.round_num = 0 # set up every after every local_train in main.py
 
     def SendWeights(self, request, context):
         """

@@ -74,6 +74,7 @@ def main():
     s3_key = "all_data_niid_05_keep_3_train_9.json"
     X_train, Mask_train, Y_train, X_val, Mask_val, Y_val = SentimentPyTorch.prepare_dataset(bucket_name, s3_key)
 
+    my_samples = len(Y_train)
     # ==========================================
     # 2. Prepare global model
     # ==========================================
@@ -99,6 +100,8 @@ def main():
     # 4. Start gRPC server
     # ==========================================
     server, servicer = start_grpc_server(MY_PORT, MY_ID)
+    # add num_samples to servicer
+    servicer.num_samples = my_samples
 
     # ==========================================
     # 5. Discovery
@@ -126,16 +129,75 @@ def main():
     servicer.peers = peers
     servicer.fanout = k
 
-    # if RESPAWNED:
+    start_round = 0
+    if RESPAWNED == "true":
+        print("[Recovery] Nodo respawnato. Richiedo i pesi locali ai peer...")
         # prendo i pesi
-        # faccio fedavfg
-        # setto start_round = round_num + 1
+        # 1: chiedo a ogni peer trovato i loro pesi
+        for peer in peers: 
+            payload = federated_pb2.NUOVOWeightPayload(
+                    sender_id=MY_ID,
+            )
+            # NOTA: get_weights_from_peer deve dire al peer di inviare i suoi pesi al nostro SendWeights
+            get_weights_from_peer(peer['ip'], peer['port'], peer['id'], payload)
+
+        # 2: attendo la risposta
+        # D. Wait for Incoming Weights for the current round_num
+        print("[Wait] Waiting to receive local weights from peers...")
+        start_wait_time = time.time()
+
+        recovered_round = -1 # Inizializziamo a -1 finché non scopriamo il round
+
+        while True:
+            with servicer.lock:
+                # Dato che non sappiamo il round_num, guardiamo le chiavi del dizionario
+                if servicer.received_weights:
+                    recovered_round = list(servicer.received_weights.keys())[0]
+                    current_round_weights = servicer.received_weights.get(recovered_round, [])
+                else:
+                    current_round_weights = []
+                if len(current_round_weights) >= len(peers):
+                    break
+
+            if time.time() - start_wait_time > WEIGHT_WAIT_TIMEOUT_SECONDS:
+                print(f"[Warning] Timeout! Proceeding with {len(current_round_weights)} received models.")
+                break
+            time.sleep(0.5)
+        
+        if recovered_round == -1:
+            print("[Error] Nessun peso ricevuto. Fallimento del recovery.")
+            #FARE RETURN O GESTIONE ERRORE
+        # E. Aggregation
+        with servicer.lock:
+            round_payloads = servicer.received_weights.get(recovered_round, [])
+
+        round_payloads.sort(key=lambda x: x.sender_id)
+        # faccio fedavg
+        # evitare di usare il modello locale perché non è stato addestrato
+        print(f"[Aggregate] Running FedAvg on {len(round_payloads)} peer models...")
+
+        deserialized_models = []
+        # Deserialize received weights and prepare for aggregation
+        for request in round_payloads:
+            state_dict = load_weights_from_bytes(request.model_weights)
+            deserialized_models.append({
+                'sender_id': request.sender_id,
+                'weights': state_dict,
+                'num_samples': request.num_samples
+            })
+
+        global_model = apply_fedavg(global_model, deserialized_models)
+            
+        # F. Clear Buffer for the next round
+        servicer.received_weights.clear()
+        # setto start_round al round successivo a quello appena completato
+        start_round = recovered_round + 1
     
     # ==========================================
     # 6. Training loop
     # ==========================================
     try:
-        for round_num in range(TOTAL_ROUNDS):
+        for round_num in range(start_round, TOTAL_ROUNDS):
             print(f"\n{'='*10} ROUND {round_num + 1} {'='*10}")
             
             # A. Local Training (Updating the global_model)
@@ -154,6 +216,8 @@ def main():
             # B. Serialize Weights for Gossip
             print("[Serialize] Converting model weights to bytes...")
             payload_bytes = get_weights_as_bytes(global_model)
+            servicer.latest_local_weights = payload_bytes # byte di payload per i client che vanno in failure durante il training
+            servicer.round_num = round_num
 
             # Add self to seen messages to avoid processing our own gossip
             servicer.seen_messages.add((MY_ID, round_num))
@@ -195,6 +259,14 @@ def main():
             print(f"[Aggregate] Running FedAvg on {len(round_payloads)} peer models...")
 
             deserialized_models = []
+            # add local model in decentralized models
+            local_fc_only = {k: v.cpu() for k, v in global_model.state_dict().items() if k.startswith('fc.')}
+            
+            deserialized_models.append({
+                    'sender_id':MY_ID,
+                    'weights': copy.deepcopy(local_fc_only),
+                    'num_samples': my_samples
+                })
             # Deserialize received weights and prepare for aggregation
             for request in round_payloads:
                 state_dict = load_weights_from_bytes(request.model_weights)
@@ -207,7 +279,7 @@ def main():
             fc_hash = get_model_hash(global_model, only_trainable=True)
             print(f"[VERIFICATION] PRIMA DI FEDAVG round {round_num} Model Classifier SHA-256: {fc_hash}")
 
-            global_model = apply_fedavg(global_model, deserialized_models, my_samples, MY_ID)
+            global_model = apply_fedavg(global_model, deserialized_models)
             
             # F. Clear Buffer for the next round
             servicer.received_weights.clear()
