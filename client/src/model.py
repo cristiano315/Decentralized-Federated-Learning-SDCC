@@ -200,3 +200,66 @@ class SentimentPyTorch(nn.Module):
             '''
 
         return model, num_training_samples
+
+    @staticmethod
+    def prepare_eval_dataset(bucket_name, s3_key):
+        """Carica tokenizza l'intero dataset per la valutazione finale."""
+        print("[Global Eval] Caricamento intero dataset JSON da S3...")
+        s3 = boto3.client('s3')
+        response = s3.get_object(Bucket=bucket_name, Key=s3_key)
+        raw_data = json.loads(response['Body'].read().decode('utf-8'))
+
+        texts, labels = [], []
+        for user in raw_data['users']:
+            for tweet, label in zip(raw_data['user_data'][user]['x'], raw_data['user_data'][user]['y']):
+                texts.append(tweet[4])
+                labels.append(1 if label == 4 else label)
+
+        print(f"[Global Eval] Tokenizzazione di {len(texts)} campioni in corso...")
+        tokenizer = DistilBertTokenizer.from_pretrained('distilbert-base-uncased')
+        encoded = tokenizer(texts, padding=True, truncation=True, max_length=128, return_tensors='pt')
+
+        X = encoded['input_ids']
+        Mask = encoded['attention_mask']
+        Y = torch.tensor(labels, dtype=torch.int64)
+
+        return X, Mask, Y
+
+    @staticmethod
+    def evaluate_global(model, X_test, Mask_test, Y_test, device):
+        """Calcola Loss e Accuracy su tutto il dataset fornito."""
+        model.eval()
+        criterion = nn.CrossEntropyLoss()
+        
+        # Usiamo un batch_size come in train_local per evitare Out Of Memory
+        batch_size = 32 
+        test_dataset = TensorDataset(X_test, Mask_test, Y_test)
+        test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+        
+        total_loss = 0.0
+        correct_preds = 0
+        
+        print(f"[Global Eval] Avvio inferenza su {len(Y_test)} campioni. Batch totali: {len(test_loader)}")
+        
+        with torch.no_grad():
+            for batch_idx, (batch_x, batch_mask, batch_y) in enumerate(test_loader):
+                batch_x, batch_mask, batch_y = batch_x.to(device), batch_mask.to(device), batch_y.to(device)
+                
+                output = model(batch_x, batch_mask)
+                loss = criterion(output, batch_y)
+                total_loss += loss.item() * batch_x.size(0)
+                                
+                preds = output.argmax(1)
+                correct_preds += (preds == batch_y).float().sum().item()
+                
+                if (batch_idx + 1) % 50 == 0 or (batch_idx + 1) == len(test_loader):
+                    print(f"[Global Eval] Batch {batch_idx+1:04d}/{len(test_loader):04d} completato.")
+        
+        avg_loss = total_loss / len(Y_test)
+        accuracy = correct_preds / len(Y_test)
+        
+        print("\n" + "="*30)
+        print(f"[RISULTATI GLOBALI] Loss Finale: {avg_loss:.4f} | Accuracy: {accuracy:.4f}")
+        print("="*30 + "\n")
+        
+        return avg_loss, accuracy

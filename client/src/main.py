@@ -8,6 +8,7 @@ import torch
 import os
 
 import urllib
+import copy
 
 # Import generated gRPC code
 from rpc_calls import RegistryClient, send_weights_to_peer
@@ -314,6 +315,20 @@ def main():
     print(f"[VERIFICATION] Final Model Classifier SHA-256: {fc_hash}")
     print(f"[VERIFICATION] Final Model Full SHA-256:       {full_hash}")
     print("="*10 + "\n")
+
+    # 8. Evaluation
+    # check ability to generalize with the data untouched by the users
+    print("Valutazione globale su modello finale")
+
+    try:
+        #tokenizza dataset
+        X_full, Mask_full, Y_full = SentimentPyTorch.prepare_eval_dataset(bucket_name, s3_key)
+
+        #valuta modello aggregato
+        SentimentPyTorch.evaluate_global(global_model, X_full, Mask_full, Y_full, device)
+    except Exception as e:
+        print(f"[Error] Valutazione globale fallita: {e}")
+    
     
 if __name__ == "__main__":
     main()
