@@ -12,10 +12,14 @@ option go_package = "./federated";
 service RegistryService {
     // Register to the service registry
     rpc RegisterNode (NodeInfo) returns (RegisterResponse);
+    // Register when respawned after a crash
+    rpc RegisterRespawnedNode (NodeInfo) returns (RegisterResponse);
     // Discover other nodes in the network
     rpc DiscoverNodes (DiscoverRequest) returns (DiscoverResponse);
     // Unregister from the service registry
     rpc UnregisterNode (NodeInfo) returns (Ack);
+    // Signal to the registry that a node is unresponsive
+    rpc SignalUnresponsiveNode (FullNodeInfo) returns (Ack);
 }
 
 // ===============================================================
@@ -25,8 +29,12 @@ service RegistryService {
 service FederatedNode {
     // A client sends local weights to other clients (Gossip/P2P)
     rpc SendWeights (WeightPayload) returns (Ack);
+    // A client requests weights from other clients (Gossip/P2P)
+    rpc RequestWeights (WeightRequest) returns (WeightPayload);
     // A registry node can ping other nodes to check if they are alive
     rpc Ping (NodeInfo) returns (Ack);
+    // A registry node can notify other nodes that a node is unresponsive
+    rpc NotifyUnresponsiveNode (NodeInfo) returns (Ack);
 }
 
 // ===============================================================
@@ -50,6 +58,18 @@ message NodeInfo {
     string node_id = 1; // Unique identifier for the node
     string ip_address = 2; // IP address of the node
     int32 port = 3; // Port number for communication
+}
+
+// Full node info for fault recovery
+message FullNodeInfo {
+    string node_id = 1; // Unique identifier for the node
+    string ip_address = 2; // IP address of the node
+    int32 port = 3; // Port number for communication
+    int32 current_round = 4; // Last training round completed by the node
+    int32 required_nodes = 5; // Number of nodes required for the training
+    int32 total_rounds = 6; // Total number of training rounds
+    int32 max_discovery_retries = 7; // Maximum number of retries for node discovery
+    int32 weight_wait_timeout_seconds = 8; // Timeout in seconds for waiting for weights from peers
 }
 
 // Response for registration
@@ -90,4 +110,10 @@ message Ack {
 // Request for the global model from the central server
 message GlobalModelRequest {
     string requester_id = 1;
+}
+
+// Request for local weights from other clients (Gossip/P2P)
+message WeightRequest {
+    string requester_id = 1;
+    int32 round_number = 2; // Current training round, to be used in case one is behind
 }

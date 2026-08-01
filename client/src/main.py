@@ -61,10 +61,10 @@ def main():
     REGISTRY_ADDR = os.getenv("REGISTRY_ADRESS")
     TRAINING_NODES = int(os.getenv("TRAINING_NODES", 5))
     TOTAL_ROUNDS = int(os.getenv("TOTAL_ROUNDS", 5))
+    START_ROUND = int(os.getenv("START_ROUND", 0))
     NUM_PEERS_REQUIRED = int(os.getenv("NUM_PEERS_REQUIRED", TRAINING_NODES - 1)) # to exclude self node
     MAX_DISCOVERY_RETRIES = int(os.getenv("MAX_DISCOVERY_RETRIES", 5))
     WEIGHT_WAIT_TIMEOUT_SECONDS = int(os.getenv("WEIGHT_WAIT_TIMEOUT_SECONDS", 30))
-    RESPAWNED = os.getenv("RESPAWNED", "False").lower() == "true"
     
     print("Client is running.")
 
@@ -93,9 +93,14 @@ def main():
     registry_client = RegistryClient(REGISTRY_ADDR, MY_ID)
     print(f"Client initialized with ID: {MY_ID}, IP: {MY_IP}, Port: {MY_PORT}")
     
-    if not registry_client.register_node(MY_IP, MY_PORT):
-        print("Fatal error: Could not connect to Registry. Exiting.")
-        return
+    if START_ROUND == 0:
+        if not registry_client.register_node(MY_IP, MY_PORT):
+            print("Fatal error: Could not connect to Registry. Exiting.")
+            return
+    else:
+        if not registry_client.register_respawned_node(MY_IP, MY_PORT, START_ROUND):
+            print("Fatal error: Could not connect to Registry for respawned node. Exiting.")
+            return
     
     # ==========================================
     # 4. Start gRPC server
@@ -103,6 +108,7 @@ def main():
     server, servicer = start_grpc_server(MY_PORT, MY_ID)
     # add num_samples to servicer
     servicer.num_samples = my_samples
+    registry_client.servicer = servicer
 
     # ==========================================
     # 5. Discovery
@@ -130,47 +136,30 @@ def main():
     servicer.peers = peers
     servicer.fanout = k
 
-    start_round = 0
-    if RESPAWNED == "true":
+    start_round = START_ROUND
+
+    # Respawn recovery: if the node is respawned, it should request the local weights from peers to recover the model state
+    if start_round != 0:
         print("[Recovery] Nodo respawnato. Richiedo i pesi locali ai peer...")
         # prendo i pesi
         # 1: chiedo a ogni peer trovato i loro pesi
         for peer in peers: 
-            payload = federated_pb2.NUOVOWeightPayload(
-                    sender_id=MY_ID,
-            )
             # NOTA: get_weights_from_peer deve dire al peer di inviare i suoi pesi al nostro SendWeights
-            get_weights_from_peer(peer['ip'], peer['port'], peer['id'], payload)
+            # Questa funziona popola automaticamente servicer.received_weights con i pesi ricevuti dai peer
+            servicer.get_weights_from_peer(peer['ip'], peer['port'], peer['id'], MY_ID, start_round)
 
         # 2: attendo la risposta
         # D. Wait for Incoming Weights for the current round_num
         print("[Wait] Waiting to receive local weights from peers...")
         start_wait_time = time.time()
 
-        recovered_round = -1 # Inizializziamo a -1 finché non scopriamo il round
-
-        while True:
-            with servicer.lock:
-                # Dato che non sappiamo il round_num, guardiamo le chiavi del dizionario
-                if servicer.received_weights:
-                    recovered_round = list(servicer.received_weights.keys())[0]
-                    current_round_weights = servicer.received_weights.get(recovered_round, [])
-                else:
-                    current_round_weights = []
-                if len(current_round_weights) >= len(peers):
-                    break
-
-            if time.time() - start_wait_time > WEIGHT_WAIT_TIMEOUT_SECONDS:
-                print(f"[Warning] Timeout! Proceeding with {len(current_round_weights)} received models.")
-                break
-            time.sleep(0.5)
-        
-        if recovered_round == -1:
+        if servicer.received_weights[start_round] is None or len(servicer.received_weights[start_round]) == 0:
             print("[Error] Nessun peso ricevuto. Fallimento del recovery.")
             #FARE RETURN O GESTIONE ERRORE
+            return
         # E. Aggregation
         with servicer.lock:
-            round_payloads = servicer.received_weights.get(recovered_round, [])
+            round_payloads = servicer.received_weights.get(start_round, [])
 
         round_payloads.sort(key=lambda x: x.sender_id)
         # faccio fedavg
@@ -192,7 +181,7 @@ def main():
         # F. Clear Buffer for the next round
         servicer.received_weights.clear()
         # setto start_round al round successivo a quello appena completato
-        start_round = recovered_round + 1
+        start_round += 1
     
     # ==========================================
     # 6. Training loop
@@ -234,7 +223,21 @@ def main():
                     model_weights=payload_bytes,
                     num_samples=my_samples
                 )
-                send_weights_to_peer(peer['ip'], peer['port'], peer['id'], payload)
+                if send_weights_to_peer(peer['ip'], peer['port'], peer['id'], payload) == 1: # If 1 is returned, the peer is unresponsive
+                    print(f"[Warning] Peer {peer['id']} is unresponsive. Removing from peer list and signaling to registry.")
+                    # 1. Rimuovi dal Servicer in modo thread-safe
+                    servicer.remove_peer_by_id(peer['id'])
+                    
+                    # 2. Aggiorna la reference locale per il ciclo corrente
+                    peers = servicer.peers 
+                    
+                    # 3. Segnala al Go Registry
+                    registry_client.signal_unresponsive_node(
+                        peer['ip'], peer['port'], peer['id'], 
+                        NUM_PEERS_REQUIRED, MY_PORT, TOTAL_ROUNDS, 
+                        START_ROUND, NUM_PEERS_REQUIRED, 
+                        MAX_DISCOVERY_RETRIES, WEIGHT_WAIT_TIMEOUT_SECONDS
+                    )
 
             # D. Wait for Incoming Weights for the current round_num
             print(f"[Wait] Waiting to receive weights for round {round_num + 1}...")

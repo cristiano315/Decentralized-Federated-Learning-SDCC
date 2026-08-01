@@ -4,7 +4,7 @@ CLIENT_DIR = ../client/src
 SERVER_DIR = ../server
 REGISTRY_DIR = ../registry/src
 
-all: go python
+all: go python-client python-server
 
 # === GO TARGET ===
 go:

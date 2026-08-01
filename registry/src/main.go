@@ -88,6 +88,50 @@ func (s *registryServer) RegisterNode(ctx context.Context, req *pb.NodeInfo) (*p
 	}, nil
 }
 
+func (s *registryServer) RegisterRespawnedNode(ctx context.Context, req *pb.NodeInfo) (*pb.RegisterResponse, error) {
+    s.mu.Lock()
+    s.nodes[req.NodeId] = req
+    if s.pendingNodes > 0 {
+        s.pendingNodes--
+    }
+    s.cond.Broadcast()
+
+    // Fai uno snapshot dei peer esistenti (escludendo il nuovo arrivato)
+    existingPeers := make([]*pb.NodeInfo, 0, len(s.nodes)-1)
+    for id, n := range s.nodes {
+        if id != req.NodeId {
+            existingPeers = append(existingPeers, n)
+        }
+    }
+    s.mu.Unlock()
+
+    // Salva su DynamoDB
+    if err := utils.AddNode(req); err != nil {
+        log.Printf("[ERROR] Error adding node %s to DynamoDB: %v", req.NodeId, err)
+    }
+
+    log.Printf("[REGISTER] Node joined: %s at %s:%d", req.NodeId, req.IpAddress, req.Port)
+
+    // Notifica in parallelo tutti gli altri nodi che c'è un NUOVO peer disponibile
+    var wg sync.WaitGroup
+    for _, peer := range existingPeers {
+        wg.Add(1)
+        go func(p *pb.NodeInfo) {
+            defer wg.Done()
+            signalNewNode(p, req) // Invia al peer 'p' le info sul nuovo nodo 'req'
+        }(peer)
+    }
+    // Non blocchiamo la risposta gRPC se i ping sono lenti
+    go func() {
+        wg.Wait()
+    }()
+
+    return &pb.RegisterResponse{
+        Success: true,
+        Message: fmt.Sprintf("Node %s successfully registered.", req.NodeId),
+    }, nil
+}
+
 // Discover handles requests from nodes asking for the list of peers.
 func (s *registryServer) DiscoverNodes(ctx context.Context, req *pb.DiscoverRequest) (*pb.DiscoverResponse, error) {
 	// Read-Lock the map (multiple clients can read simultaneously without blocking each other)
@@ -201,6 +245,39 @@ func (s *registryServer) UnregisterNode(ctx context.Context, req *pb.NodeInfo) (
 	}, nil
 }
 
+// SignalUnresponsiveNode allows nodes to signal the registry that a peer is unresponsive.
+func (s *registryServer) SignalUnresponsiveNode(ctx context.Context, req *pb.FullNodeInfo) (*pb.Ack, error) {
+	// Lock the map for writing to prevent race conditions
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Remove the node from the in-memory map
+	delete(s.nodes, req.NodeId)
+
+	// Remove the node from dynamoDB
+	err := utils.RemoveNode(req.NodeId)
+	if err != nil {
+		log.Printf("[ERROR] Error removing node %s from DynamoDB: %v", req.NodeId, err)
+	} else {
+		log.Printf("[INFO] Node %s removed from DynamoDB.", req.NodeId)
+	}
+
+	log.Printf("[SIGNAL_UNRESPONSIVE] Node is unresponsive: %s at %s:%d\n", req.NodeId, req.IpAddress, req.Port)
+
+	// Create a new node to replace the unresponsive one
+	s.raiseSpecificNode(req.NodeId, int(req.RequiredNodes), int(req.Port), int(req.TotalRounds), int(req.CurrentRound), int(req.MaxDiscoveryRetries), int(req.WeightWaitTimeoutSeconds))
+
+	// Notify any waiting goroutines that a node has been removed
+	s.cond.Broadcast()
+
+	// Signal all nodes that a node has been removed. It will be done when the new node is raised and registered, so it can be signaled to all nodes.
+
+	return &pb.Ack{
+		Success: true,
+		Message: fmt.Sprintf("Node %s successfully signaled as unresponsive.", req.NodeId),
+	}, nil
+}
+
 func (s *registryServer) raiseRequiredNodes(required int) {
 	local := utils.GetFullLocalAdress()
 
@@ -217,11 +294,11 @@ func (s *registryServer) raiseRequiredNodes(required int) {
 			{Key: "TRAINING_NODES", Value: strconv.Itoa(clientNumber)},
 			{Key: "PORT", Value: "50051"},
 			{Key: "TOTAL_ROUNDS", Value: "3"},
+			{Key: "START_ROUND", Value: "0"},
 			{Key: "NUM_PEERS_REQUIRED", Value: strconv.Itoa(peersRequired)},
 			{Key: "MAX_DISCOVERY_RETRIES", Value: "5"},
 			{Key: "WEIGHT_WAIT_TIMEOUT_SECONDS", Value: "1200"},
 			{Key: "REGISTRY_ADRESS", Value: local},
-			{Key: "RESPAWNED", Value: "False"},
 		}
 
 		err := utils.LaunchTask("federated_cluster", "client_task", 1, "client_container", env)
@@ -234,6 +311,38 @@ func (s *registryServer) raiseRequiredNodes(required int) {
 	}
 
 	fmt.Printf("Raised required nodes to %d\n", required)
+}
+
+func (s *registryServer) raiseSpecificNode(id string, requiredNodes int, port int, totalRounds int, startRound int, maxDiscoveryRetries int, weightWaitTimeoutSeconds int) {
+	local := utils.GetFullLocalAdress()
+
+
+	s.mu.Lock()
+	env := []utils.EnvVar{
+		{Key: "CLIENT_ID", Value: id},
+		{Key: "TRAINING_NODES", Value: strconv.Itoa(requiredNodes)},
+		{Key: "PORT", Value: strconv.Itoa(port)},
+		{Key: "TOTAL_ROUNDS", Value: strconv.Itoa(totalRounds)},
+		{Key: "START_ROUND", Value: strconv.Itoa(startRound)},
+		{Key: "NUM_PEERS_REQUIRED", Value: strconv.Itoa(requiredNodes)},
+		{Key: "MAX_DISCOVERY_RETRIES", Value: strconv.Itoa(maxDiscoveryRetries)},
+		{Key: "WEIGHT_WAIT_TIMEOUT_SECONDS", Value: strconv.Itoa(weightWaitTimeoutSeconds)},
+		{Key: "REGISTRY_ADRESS", Value: local},
+	}
+
+	// Aggiorna lo stato protetto prima della chiamata remota
+    s.mu.Lock()
+    s.pendingNodes += 1
+    s.mu.Unlock()
+
+    go func() {
+        err := utils.LaunchTask("federated_cluster", "client_task", 1, "client_container", env)
+        if err != nil {
+            fmt.Printf("AWS Error: %s\n", err.Error())
+        }
+    }()
+
+	fmt.Printf("Raised node with id %s\n", id)
 }
 
 func pingNode(node *pb.NodeInfo) bool {
@@ -257,6 +366,34 @@ func pingNode(node *pb.NodeInfo) bool {
 	}
 
 	resp, err := client.Ping(ctx, req)
+	if err != nil {
+		return false
+	}
+
+	return resp.Success
+}
+
+func signalNewNode(oldNode *pb.NodeInfo, newNode *pb.NodeInfo) bool {
+	address := fmt.Sprintf("%s:%d", oldNode.IpAddress, oldNode.Port)
+
+	conn, err := grpc.NewClient(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return false
+	}
+	defer conn.Close()
+
+	client := pb.NewFederatedNodeClient(conn)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	req := &pb.NodeInfo{
+		NodeId:    newNode.NodeId,
+		IpAddress: newNode.IpAddress,
+		Port:      newNode.Port,
+	}
+
+	resp, err := client.NotifyUnresponsiveNode(ctx, req)
 	if err != nil {
 		return false
 	}
