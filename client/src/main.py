@@ -325,7 +325,7 @@ def main():
 
     try:
         #tokenizza dataset
-        X_full, Mask_full, Y_full = SentimentPyTorch.prepare_eval_dataset(bucket_name, s3_key)
+        X_full, Mask_full, Y_full = SentimentPyTorch.prepare_eval_dataset(bucket_name, s3_key, TRAINING_NODES)
 
         #valuta modello aggregato
         SentimentPyTorch.evaluate_global(global_model, X_full, Mask_full, Y_full, device)
