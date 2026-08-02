@@ -36,6 +36,9 @@ type registryServer struct {
 	// Map to store active nodes. Key: node_id, Value: NodeInfo
 	nodes map[string]*pb.NodeInfo
 
+	// Avoids spawning multiple nodes with the same ID in case of respawn
+	respawningNodes map[string]bool
+
 	cond *sync.Cond
 
 	currentClientID int
@@ -66,6 +69,7 @@ func (s *registryServer) RegisterNode(ctx context.Context, req *pb.NodeInfo) (*p
 	defer s.cond.Broadcast()
 
 	// Store the node information in the map
+	delete(s.respawningNodes, req.NodeId) // Sblocca il deduping per il futuro
 	s.nodes[req.NodeId] = req
 	s.pendingNodes -= 1
 
@@ -90,6 +94,7 @@ func (s *registryServer) RegisterNode(ctx context.Context, req *pb.NodeInfo) (*p
 
 func (s *registryServer) RegisterRespawnedNode(ctx context.Context, req *pb.NodeInfo) (*pb.RegisterResponse, error) {
     s.mu.Lock()
+	delete(s.respawningNodes, req.NodeId) // Sblocca il deduping per il futuro
     s.nodes[req.NodeId] = req
     if s.pendingNodes > 0 {
         s.pendingNodes--
@@ -247,12 +252,27 @@ func (s *registryServer) UnregisterNode(ctx context.Context, req *pb.NodeInfo) (
 
 // SignalUnresponsiveNode allows nodes to signal the registry that a peer is unresponsive.
 func (s *registryServer) SignalUnresponsiveNode(ctx context.Context, req *pb.FullNodeInfo) (*pb.Ack, error) {
-	// Lock the map for writing to prevent race conditions
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
-	// Remove the node from the in-memory map
+	// 1. VERIFICA DEDUPING: Se il nodo è già stato rimosso o è già in fase di respawn, ignora!
+	_, existsInMap := s.nodes[req.NodeId]
+	alreadyRespawning := s.respawningNodes[req.NodeId]
+
+	if !existsInMap || alreadyRespawning {
+		s.mu.Unlock()
+		log.Printf("[SIGNAL_UNRESPONSIVE] Node %s already processed or being respawned. Ignoring duplicate signal.", req.NodeId)
+		return &pb.Ack{
+			Success: true,
+			Message: fmt.Sprintf("Signal for node %s ignored (already processing).", req.NodeId),
+		}, nil
+	}
+
+	// 2. Segna il nodo come "in fase di respawn" e rimuovilo dalla mappa
+	s.respawningNodes[req.NodeId] = true
 	delete(s.nodes, req.NodeId)
+	s.pendingNodes++
+	s.cond.Broadcast()
+	s.mu.Unlock()
 
 	// Remove the node from dynamoDB
 	err := utils.RemoveNode(req.NodeId)
@@ -265,10 +285,15 @@ func (s *registryServer) SignalUnresponsiveNode(ctx context.Context, req *pb.Ful
 	log.Printf("[SIGNAL_UNRESPONSIVE] Node is unresponsive: %s at %s:%d\n", req.NodeId, req.IpAddress, req.Port)
 
 	// Create a new node to replace the unresponsive one
-	s.raiseSpecificNode(req.NodeId, int(req.RequiredNodes), int(req.Port), int(req.TotalRounds), int(req.CurrentRound), int(req.MaxDiscoveryRetries), int(req.WeightWaitTimeoutSeconds))
-
-	// Notify any waiting goroutines that a node has been removed
-	s.cond.Broadcast()
+	go s.raiseSpecificNode(
+		req.NodeId,
+		int(req.RequiredNodes),
+		int(req.Port),
+		int(req.TotalRounds),
+		int(req.CurrentRound),
+		int(req.MaxDiscoveryRetries),
+		int(req.WeightWaitTimeoutSeconds),
+	)
 
 	// Signal all nodes that a node has been removed. It will be done when the new node is raised and registered, so it can be signaled to all nodes.
 
@@ -299,6 +324,7 @@ func (s *registryServer) raiseRequiredNodes(required int) {
 			{Key: "MAX_DISCOVERY_RETRIES", Value: "5"},
 			{Key: "WEIGHT_WAIT_TIMEOUT_SECONDS", Value: "1200"},
 			{Key: "REGISTRY_ADRESS", Value: local},
+			{Key: "RESPAWNED", Value: "false"},
 		}
 
 		err := utils.LaunchTask("federated_cluster", "client_task", 1, "client_container", env)
@@ -317,7 +343,6 @@ func (s *registryServer) raiseSpecificNode(id string, requiredNodes int, port in
 	local := utils.GetFullLocalAdress()
 
 
-	s.mu.Lock()
 	env := []utils.EnvVar{
 		{Key: "CLIENT_ID", Value: id},
 		{Key: "TRAINING_NODES", Value: strconv.Itoa(requiredNodes)},
@@ -328,19 +353,20 @@ func (s *registryServer) raiseSpecificNode(id string, requiredNodes int, port in
 		{Key: "MAX_DISCOVERY_RETRIES", Value: strconv.Itoa(maxDiscoveryRetries)},
 		{Key: "WEIGHT_WAIT_TIMEOUT_SECONDS", Value: strconv.Itoa(weightWaitTimeoutSeconds)},
 		{Key: "REGISTRY_ADRESS", Value: local},
+		{Key: "RESPAWNED", Value: "true"},
 	}
 
-	// Aggiorna lo stato protetto prima della chiamata remota
-    s.mu.Lock()
-    s.pendingNodes += 1
-    s.mu.Unlock()
-
-    go func() {
-        err := utils.LaunchTask("federated_cluster", "client_task", 1, "client_container", env)
-        if err != nil {
-            fmt.Printf("AWS Error: %s\n", err.Error())
-        }
-    }()
+	err := utils.LaunchTask("federated_cluster", "client_task", 1, "client_container", env)
+	if err != nil {
+		log.Printf("[ERROR] AWS Error launching respawned node %s: %v\n", id, err)
+		// Se il lancio fallisce, ripristiniamo il conteggio dei nodi pending
+		s.mu.Lock()
+		if s.pendingNodes > 0 {
+			s.pendingNodes--
+		}
+		s.mu.Unlock()
+		return
+	}
 
 	fmt.Printf("Raised node with id %s\n", id)
 }
@@ -420,6 +446,7 @@ func main() {
 	// 3. Instantiate our custom server struct with an initialized map
 	myServer := &registryServer{
 		nodes: make(map[string]*pb.NodeInfo),
+		respawningNodes: make(map[string]bool),
 	}
 	myServer.cond = sync.NewCond(&myServer.mu)
 

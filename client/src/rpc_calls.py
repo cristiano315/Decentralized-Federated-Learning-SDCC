@@ -84,7 +84,11 @@ class FederatedNodeServicer(federated_pb2_grpc.FederatedNodeServicer):
             try:
                 # Forward the same identical payload (maintains the original sender_id)
                 print(f"[Gossip] Forwarding weights to {peer['id']}...")
-                send_weights_to_peer(peer['ip'], peer['port'], peer['id'], request)
+                status = send_weights_to_peer(peer['ip'], peer['port'], peer['id'], request)
+                # Se il nodo non risponde, lo rimuoviamo semplicemente dalla topologia locale
+                if status == 1:
+                    print(f"[Warning] Peer {peer['id']} unreacheable during gossip forward. Removing locally.")
+                    self.remove_peer_by_id(peer['id'])
             except Exception as e:
                 print(f"[Gossip] Error forwarding to {peer['id']}: {e}")
 
@@ -249,13 +253,14 @@ class RegistryClient:
         if request.node_id == self.my_id:
             return federated_pb2.Ack(success=True, message="Node is alive")
 
-    def notify_unresponsive_node(self, request, context):
+    def NotifyUnresponsiveNode(self, request, context):
         """
         RPC method to handle notifications about unresponsive nodes from the registry.
         """
         # Se il servicer è collegato, aggiorna la lista dei peer
         if self.servicer is not None:
             self.servicer.add_or_update_peer({"id": request.node_id, "ip": request.ip_address, "port": request.port})
+            print(f"[Registry Notification] Peer {request.node_id} marked as unresponsive. Updated local peer list.")
         else:
             print("[Warning] Servicer non collegato a RegistryClient, impossibile aggiornare la lista dei peer.")
 
@@ -293,7 +298,7 @@ class RegistryClient:
                     port=int(peer_port),
                     required_nodes=requiredNodes,
                     total_rounds=totalRounds,
-                    start_round=startRound,
+                    current_round=startRound,
                     max_discovery_retries=maxDiscoveryRetries,
                     weight_wait_timeout_seconds=weightWaitTimeoutSeconds
                 )

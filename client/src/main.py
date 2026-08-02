@@ -65,6 +65,7 @@ def main():
     NUM_PEERS_REQUIRED = int(os.getenv("NUM_PEERS_REQUIRED", TRAINING_NODES - 1)) # to exclude self node
     MAX_DISCOVERY_RETRIES = int(os.getenv("MAX_DISCOVERY_RETRIES", 5))
     WEIGHT_WAIT_TIMEOUT_SECONDS = int(os.getenv("WEIGHT_WAIT_TIMEOUT_SECONDS", 30))
+    RESPAWNED = os.getenv("RESPAWNED", "false").lower() == "true"
     
     print("Client is running.")
 
@@ -93,12 +94,12 @@ def main():
     registry_client = RegistryClient(REGISTRY_ADDR, MY_ID)
     print(f"Client initialized with ID: {MY_ID}, IP: {MY_IP}, Port: {MY_PORT}")
     
-    if START_ROUND == 0:
+    if not RESPAWNED:
         if not registry_client.register_node(MY_IP, MY_PORT):
             print("Fatal error: Could not connect to Registry. Exiting.")
             return
     else:
-        if not registry_client.register_respawned_node(MY_IP, MY_PORT, START_ROUND):
+        if not registry_client.register_respawned_node(MY_IP, MY_PORT):
             print("Fatal error: Could not connect to Registry for respawned node. Exiting.")
             return
     
@@ -139,7 +140,7 @@ def main():
     start_round = START_ROUND
 
     # Respawn recovery: if the node is respawned, it should request the local weights from peers to recover the model state
-    if start_round != 0:
+    if RESPAWNED:
         print("[Recovery] Nodo respawnato. Richiedo i pesi locali ai peer...")
         # prendo i pesi
         # 1: chiedo a ogni peer trovato i loro pesi
@@ -229,7 +230,9 @@ def main():
                     servicer.remove_peer_by_id(peer['id'])
                     
                     # 2. Aggiorna la reference locale per il ciclo corrente
-                    peers = servicer.peers 
+                    peers = servicer.peers
+
+                    time.sleep(random.uniform(0.1, 2.0))
                     
                     # 3. Segnala al Go Registry
                     registry_client.signal_unresponsive_node(
