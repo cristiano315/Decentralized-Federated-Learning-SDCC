@@ -202,8 +202,8 @@ class SentimentPyTorch(nn.Module):
         return model, num_training_samples
 
     @staticmethod
-    def prepare_eval_dataset(bucket_name, s3_key):
-        """Carica tokenizza l'intero dataset per la valutazione finale."""
+    def prepare_eval_dataset(bucket_name, s3_key, training_nodes):
+        """Carica tokenizza un decimo del dataset (non usato per il training) per la valutazione finale."""
         print("[Global Eval] Caricamento intero dataset JSON da S3...")
         s3 = boto3.client('s3')
         response = s3.get_object(Bucket=bucket_name, Key=s3_key)
@@ -214,6 +214,32 @@ class SentimentPyTorch(nn.Module):
             for tweet, label in zip(raw_data['user_data'][user]['x'], raw_data['user_data'][user]['y']):
                 texts.append(tweet[4])
                 labels.append(1 if label == 4 else label)
+
+        # ---------------------------------------------------------
+        # SELEZIONE DI 1/10 DEL DATASET (DATI NON VISTI)
+        # ---------------------------------------------------------
+        total_original = len(texts)
+        samples_per_client = 500
+        used_samples = training_nodes * samples_per_client
+        eval_samples_count = total_original // 10  # Prende un decimo dei dati totali
+
+        print(f"[Global Eval] Totale campioni dataset: {total_original}. Campioni usati in training: {used_samples}.")
+        
+        # Partiamo da dove sono arrivati i client
+        start_idx = used_samples % total_original
+        end_idx = start_idx + eval_samples_count
+
+        # Stessa logica di taglio circolare usata nel train_local in caso si superi la fine della lista
+        if end_idx <= total_original:
+            texts = texts[start_idx:end_idx]
+            labels = labels[start_idx:end_idx]
+        else:
+            remainder = end_idx - total_original
+            texts = texts[start_idx:] + texts[:remainder]
+            labels = labels[start_idx:] + labels[:remainder]
+
+        print(f"[Global Eval] Selezionati {len(texts)} campioni per la valutazione (1/10 del totale, dall'indice {start_idx} al {end_idx}).")
+        # ---------------------------------------------------------
 
         print(f"[Global Eval] Tokenizzazione di {len(texts)} campioni in corso...")
         tokenizer = DistilBertTokenizer.from_pretrained('distilbert-base-uncased')
