@@ -280,7 +280,7 @@ class RegistryClient:
             print(f"[RPC Error] Failed to unregister: {e.details()}")
             return False
 
-    def signal_unresponsive_node(self, peer_ip: str, peer_port: int, peer_id: str, requiredNodes: int, port: int, totalRounds: int, startRound: int, peersRequired: int, maxDiscoveryRetries: int, weightWaitTimeoutSeconds: int):
+    def signal_unresponsive_node(self, peer_ip: str, peer_port: int, peer_id: str, requiredNodes: int, totalRounds: int, startRound: int, maxDiscoveryRetries: int, weightWaitTimeoutSeconds: int):
         """
         Signals to the registry that a peer node is unresponsive.
         """
@@ -292,10 +292,8 @@ class RegistryClient:
                     ip_address=str(peer_ip),
                     port=int(peer_port),
                     required_nodes=requiredNodes,
-                    port=port,
                     total_rounds=totalRounds,
                     start_round=startRound,
-                    peers_required=peersRequired,
                     max_discovery_retries=maxDiscoveryRetries,
                     weight_wait_timeout_seconds=weightWaitTimeoutSeconds
                 )

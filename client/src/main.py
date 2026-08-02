@@ -234,9 +234,9 @@ def main():
                     # 3. Segnala al Go Registry
                     registry_client.signal_unresponsive_node(
                         peer['ip'], peer['port'], peer['id'], 
-                        NUM_PEERS_REQUIRED, MY_PORT, TOTAL_ROUNDS, 
-                        START_ROUND, NUM_PEERS_REQUIRED, 
-                        MAX_DISCOVERY_RETRIES, WEIGHT_WAIT_TIMEOUT_SECONDS
+                        NUM_PEERS_REQUIRED, TOTAL_ROUNDS, 
+                        START_ROUND, MAX_DISCOVERY_RETRIES, 
+                        WEIGHT_WAIT_TIMEOUT_SECONDS
                     )
 
             # D. Wait for Incoming Weights for the current round_num
