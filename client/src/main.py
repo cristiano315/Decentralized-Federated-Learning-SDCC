@@ -1,14 +1,13 @@
 import json
 import random
-
 import grpc
 from concurrent import futures
 import time
 import torch
 import os
-
 import urllib
 import copy
+import threading
 
 # Import generated gRPC code
 from rpc_calls import RegistryClient, send_weights_to_peer
@@ -53,122 +52,61 @@ def get_ecs_container_ip():
 
     return "IP address not found in metadata"
 
-def main():
-    # Configuration
-    MY_ID = str(os.getenv("CLIENT_ID"))
-    MY_IP = get_ecs_container_ip()
-    MY_PORT = int(os.getenv("PORT", 50051))
-    REGISTRY_ADDR = os.getenv("REGISTRY_ADRESS", "registry-nlb-ba1dc354920c500b.elb.us-east-1.amazonaws.com:8080")
-    TRAINING_NODES = int(os.getenv("TRAINING_NODES", 5))
-    TOTAL_ROUNDS = int(os.getenv("TOTAL_ROUNDS", 5))
-    START_ROUND = int(os.getenv("START_ROUND", 0))
-    NUM_PEERS_REQUIRED = int(os.getenv("NUM_PEERS_REQUIRED", TRAINING_NODES - 1)) # to exclude self node
-    MAX_DISCOVERY_RETRIES = int(os.getenv("MAX_DISCOVERY_RETRIES", 5))
-    WEIGHT_WAIT_TIMEOUT_SECONDS = int(os.getenv("WEIGHT_WAIT_TIMEOUT_SECONDS", 30))
-    RESPAWNED = os.getenv("RESPAWNED", "false").lower() == "true"
+def run_training_loop(config, global_model, servicer, registry_client, MY_ID, device, RESPAWNED):
+    """
+    Logica dell'addestramento federato con gestione Respawn
+    """
+    training_nodes = config['training_nodes']
+    total_rounds = config['total_rounds']
+    start_round = config['start_round']
+    peers = config['peers']
+    weight_wait_timeout = config['weight_wait_timeout']
     
-    print("Client is running.")
-
-    # ==========================================
-    # 1. Prepare data (Runs ONCE)
-    # ==========================================
+    # 1. Preparazione Dataset
     bucket_name = "sdcc-dataset-771379920513-us-east-1-an"
     s3_key = "all_data_niid_05_keep_3_train_9.json"
     X_train, Mask_train, Y_train, X_val, Mask_val, Y_val = SentimentPyTorch.prepare_dataset(bucket_name, s3_key)
-
     my_samples = len(Y_train)
-    # ==========================================
-    # 2. Prepare global model
-    # ==========================================
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"[Init] Initializing global model on {device}...")
     
-    seed = 42
-    torch.manual_seed(seed)
-    global_model = SentimentPyTorch(num_class=2)
-    global_model.to(device)
-
-    # ==========================================
-    # 3. Register to service registry
-    # ==========================================
-    registry_client = RegistryClient(REGISTRY_ADDR, MY_ID)
-    print(f"Client initialized with ID: {MY_ID}, IP: {MY_IP}, Port: {MY_PORT}")
-    
-    if not RESPAWNED:
-        if not registry_client.register_node(MY_IP, MY_PORT):
-            print("Fatal error: Could not connect to Registry. Exiting.")
-            return
-    else:
-        if not registry_client.register_respawned_node(MY_IP, MY_PORT):
-            print("Fatal error: Could not connect to Registry for respawned node. Exiting.")
-            return
-    
-    # ==========================================
-    # 4. Start gRPC server
-    # ==========================================
-    server, servicer = start_grpc_server(MY_PORT, MY_ID)
-    # add num_samples to servicer
     servicer.num_samples = my_samples
-    registry_client.servicer = servicer
-
-    # ==========================================
-    # 5. Discovery
-    # ==========================================
-    peers = []
-    retries = 0
-
-    while len(peers) < (NUM_PEERS_REQUIRED - 1):
-        if retries >= MAX_DISCOVERY_RETRIES:
-            print("[Error] Discovery timeout reached. Not enough peers.")
-            server.stop(grace=0)
-            break 
-        print(f"[Discovery] Fetching peers from Registry... (Attempt {retries + 1}/{MAX_DISCOVERY_RETRIES})")
-        peers = registry_client.get_peer_list(node_request_count=NUM_PEERS_REQUIRED)
-        if len(peers) < (NUM_PEERS_REQUIRED - 1):
-            time.sleep(5)
-            retries += 1
-    
-    print(f"Found {len(peers)} peers ready for gossip.")
-    
-    # Calculate dynamic gossip fanout based on the number of peers
-    k = calculate_k(peers)
-    print(f"[Info] Network of {len(peers) + 1} nodes. Gossip fanout (k) dynamically set to {k}.")
-
     servicer.peers = peers
+    k = calculate_k(peers)
     servicer.fanout = k
-
-    start_round = START_ROUND
-
-    # Respawn recovery: if the node is respawned, it should request the local weights from peers to recover the model state
+    
+    # ==========================================
+    # RESPAWN RECOVERY: Ripristino stato dai Peer
+    # ==========================================
     if RESPAWNED:
-        print("[Recovery] Nodo respawnato. Richiedo i pesi locali ai peer...")
-        # prendo i pesi
-        # 1: chiedo a ogni peer trovato i loro pesi
+        print("\n[Recovery] Nodo identificato come RESPAWNED. Avvio recupero pesi dai peer...")
+        
+        # 1. Chiedo i pesi a tutti i peer della lista
         for peer in peers: 
-            # NOTA: get_weights_from_peer deve dire al peer di inviare i suoi pesi al nostro SendWeights
-            # Questa funziona popola automaticamente servicer.received_weights con i pesi ricevuti dai peer
             servicer.get_weights_from_peer(peer['ip'], peer['port'], peer['id'], MY_ID, start_round)
 
-        # 2: attendo la risposta
-        # D. Wait for Incoming Weights for the current round_num
-        print("[Wait] Waiting to receive local weights from peers...")
+        print("[Wait] In attesa dei pesi locali dai peer per completare il recovery...")
         start_wait_time = time.time()
+        
+        # Attesa dei pesi con timeout
+        while True:
+            with servicer.lock:
+                rec_weights = servicer.received_weights.get(start_round, [])
+                if len(rec_weights) > 0:
+                    break
+            if time.time() - start_wait_time > weight_wait_timeout:
+                break
+            time.sleep(0.5)
 
-        if servicer.received_weights[start_round] is None or len(servicer.received_weights[start_round]) == 0:
-            print("[Error] Nessun peso ricevuto. Fallimento del recovery.")
-            #FARE RETURN O GESTIONE ERRORE
-            return
-        # E. Aggregation
         with servicer.lock:
             round_payloads = servicer.received_weights.get(start_round, [])
 
-        round_payloads.sort(key=lambda x: x.sender_id)
-        # faccio fedavg
-        # evitare di usare il modello locale perché non è stato addestrato
-        print(f"[Aggregate] Running FedAvg on {len(round_payloads)} peer models...")
+        if not round_payloads:
+            print("[Error] Nessun peso ricevuto dai peer durante il recovery. Fallimento recovery.")
+            return
 
+        print(f"[Aggregate] Recovery: Esecuzione FedAvg su {len(round_payloads)} modelli ricevuti dai peer...")
+        round_payloads.sort(key=lambda x: x.sender_id)
         deserialized_models = []
-        # Deserialize received weights and prepare for aggregation
+
         for request in round_payloads:
             state_dict = load_weights_from_bytes(request.model_weights)
             deserialized_models.append({
@@ -178,42 +116,34 @@ def main():
             })
 
         global_model = apply_fedavg(global_model, deserialized_models)
-            
-        # F. Clear Buffer for the next round
         servicer.received_weights.clear()
-        # setto start_round al round successivo a quello appena completato
+        
+        # Avanziamo il round dato che abbiamo recuperato lo stato di quello precedente
         start_round += 1
-    
-    # ==========================================
-    # 6. Training loop
-    # ==========================================
+        print(f"[Recovery] Modello ripristinato con successo. Il training ripartirà dal round {start_round + 1}.")
+
+    print(f"\n[Training] Avvio sessione di addestramento. Peers: {len(peers)}, Fanout (k): {k}")
+
+    # 2. Ciclo dei Round
     try:
-        for round_num in range(start_round, TOTAL_ROUNDS):
-            print(f"\n{'='*10} ROUND {round_num + 1} {'='*10}")
+        for round_num in range(start_round, total_rounds):
+            print(f"\n{'='*10} ROUND {round_num + 1}/{total_rounds} {'='*10}")
             
-            # A. Local Training (Updating the global_model)
-            print("[Train] Training model on local dataset...")
+            # A. Local Training
             global_model, my_samples = SentimentPyTorch.train_local(
                 model=global_model, 
-                X_train=X_train, 
-                Mask_train=Mask_train, 
-                Y_train=Y_train, 
-                X_val=X_val, 
-                Mask_val=Mask_val, 
-                Y_val=Y_val, 
+                X_train=X_train, Mask_train=Mask_train, Y_train=Y_train, 
+                X_val=X_val, Mask_val=Mask_val, Y_val=Y_val, 
                 device=device
             )
 
-            # B. Serialize Weights for Gossip
-            print("[Serialize] Converting model weights to bytes...")
+            # B. Serializzazione
             payload_bytes = get_weights_as_bytes(global_model)
-            servicer.latest_local_weights = payload_bytes # byte di payload per i client che vanno in failure durante il training
+            servicer.latest_local_weights = payload_bytes
             servicer.round_num = round_num
-
-            # Add self to seen messages to avoid processing our own gossip
             servicer.seen_messages.add((MY_ID, round_num))
             
-            # C. Gossip: Send weights to a random subset of peers
+            # C. Gossip
             actual_k = min(k, len(peers))
             initial_gossip_peers = random.sample(peers, actual_k)
             
@@ -224,57 +154,42 @@ def main():
                     model_weights=payload_bytes,
                     num_samples=my_samples
                 )
-                if send_weights_to_peer(peer['ip'], peer['port'], peer['id'], payload) == 1: # If 1 is returned, the peer is unresponsive
-                    print(f"[Warning] Peer {peer['id']} is unresponsive. Removing from peer list and signaling to registry.")
-                    # 1. Rimuovi dal Servicer in modo thread-safe
+                if send_weights_to_peer(peer['ip'], peer['port'], peer['id'], payload) == 1:
+                    print(f"[Warning] Peer {peer['id']} unresponsive. Cleanup...")
                     servicer.remove_peer_by_id(peer['id'])
-                    
-                    # 2. Aggiorna la reference locale per il ciclo corrente
                     peers = servicer.peers
-
-                    time.sleep(random.uniform(0.1, 2.0))
-                    
-                    # 3. Segnala al Go Registry
                     registry_client.signal_unresponsive_node(
                         peer['ip'], peer['port'], peer['id'], 
-                        NUM_PEERS_REQUIRED, TOTAL_ROUNDS, 
-                        START_ROUND, MAX_DISCOVERY_RETRIES, 
-                        WEIGHT_WAIT_TIMEOUT_SECONDS
+                        training_nodes, total_rounds, start_round, 5, weight_wait_timeout
                     )
 
-            # D. Wait for Incoming Weights for the current round_num
-            print(f"[Wait] Waiting to receive weights for round {round_num + 1}...")
+            # D. Wait Weights
             start_wait_time = time.time()
-
             while True:
                 with servicer.lock:
                     current_round_weights = servicer.received_weights.get(round_num, [])
                     if len(current_round_weights) >= len(peers):
                         break
 
-                if time.time() - start_wait_time > WEIGHT_WAIT_TIMEOUT_SECONDS:
-                    print(f"[Warning] Timeout! Proceeding with {len(current_round_weights)} received models.")
+                if time.time() - start_wait_time > weight_wait_timeout:
+                    print(f"[Warning] Timeout! Proseguo con {len(current_round_weights)} modelli ricevuti.")
                     break
                 time.sleep(0.5)
                 
-            # E. Aggregation
+            # E. Aggregazione (FedAvg)
             with servicer.lock:
                 round_payloads = servicer.received_weights.get(round_num, [])
 
             round_payloads.sort(key=lambda x: x.sender_id)
-            
-            print(f"[Aggregate] Running FedAvg on {len(round_payloads)} peer models...")
-
             deserialized_models = []
-            # add local model in decentralized models
-            local_fc_only = {k: v.cpu() for k, v in global_model.state_dict().items() if k.startswith('fc.')}
             
+            local_fc_only = {k: v.cpu() for k, v in global_model.state_dict().items() if k.startswith('fc.')}
             deserialized_models.append({
-                    'sender_id':MY_ID,
-                    'weights': copy.deepcopy(local_fc_only),
-                    'num_samples': my_samples
-                })
-            # Deserialize received weights and prepare for aggregation
+                'sender_id': MY_ID,
+                'weights': copy.deepcopy(local_fc_only),
+                'num_samples': my_samples
+            })
+            
             for request in round_payloads:
                 state_dict = load_weights_from_bytes(request.model_weights)
                 deserialized_models.append({
@@ -283,57 +198,163 @@ def main():
                     'num_samples': request.num_samples
                 })
             
-            fc_hash = get_model_hash(global_model, only_trainable=True)
-            print(f"[VERIFICATION] PRIMA DI FEDAVG round {round_num} Model Classifier SHA-256: {fc_hash}")
+            # HASH PRIMA DI FEDAVG
+            fc_hash_before = get_model_hash(global_model, only_trainable=True)
+            print(f"[VERIFICATION] PRIMA DI FEDAVG round {round_num + 1} Model Classifier SHA-256: {fc_hash_before}")
 
+            # Applicazione FedAvg
             global_model = apply_fedavg(global_model, deserialized_models)
             
-            # F. Clear Buffer for the next round
+            # Clear dei buffer del servicer
             servicer.received_weights.clear()
 
-            fc_hash = get_model_hash(global_model, only_trainable=True)
-            print(f"[VERIFICATION] DOPO FEDAVG round {round_num} Model Classifier SHA-256: {fc_hash}")
+            # HASH DOPO FEDAVG
+            fc_hash_after = get_model_hash(global_model, only_trainable=True)
+            print(f"[VERIFICATION] DOPO FEDAVG round {round_num + 1} Model Classifier SHA-256: {fc_hash_after}")
 
-    except KeyboardInterrupt:
-        print("\n[Shutdown] Training interrupted by user.")
-    finally:
-        # Keep server running briefly so remaining nodes can still fetch weights
-        print("[Shutdown] Waiting for network to complete rounds...")
-        time.sleep(60) # Keep gRPC server alive for lagging peers
-        
-        print("[Shutdown] Stopping background gRPC server...")
-        server.stop(grace=0)
-        registry_client.unregister_node(MY_IP, MY_PORT)
-        print("Done.")
+        print("\nTRAINING HAS BEEN COMPLETED.")
 
-    print("TRAINING HAS BEEN COMPLETED.")
+        # ==========================================
+        # VERIFICA DEGLI HASH FINALI
+        # ==========================================
+        fc_hash_final = get_model_hash(global_model, only_trainable=True)
+        full_hash_final = get_model_hash(global_model, only_trainable=False)
+
+        print("\n" + "="*10)
+        print(f"[VERIFICATION] Final Model Classifier SHA-256: {fc_hash_final}")
+        print(f"[VERIFICATION] Final Model Full SHA-256:       {full_hash_final}")
+        print("="*10 + "\n")
+
+        # Evaluation
+        print("Valutazione globale su modello finale")
+        try:
+            X_full, Mask_full, Y_full = SentimentPyTorch.prepare_eval_dataset(bucket_name, s3_key, training_nodes)
+            SentimentPyTorch.evaluate_global(global_model, X_full, Mask_full, Y_full, device)
+        except Exception as e:
+            print(f"[Error] Valutazione globale fallita: {e}")
+
+    except Exception as e:
+        print(f"[Error] Eccezione durante il training loop: {e}")
+
+def main():
+    # 1. Lettura ENV
+    MY_ID = str(os.getenv("CLIENT_ID", f"node_{random.randint(1000,9999)}"))
+    MY_IP = get_ecs_container_ip()
+    MY_PORT = int(os.getenv("PORT", 50051))
+    REGISTRY_ADDR = os.getenv("REGISTRY_ADRESS", "registry-nlb-ba1dc354920c500b.elb.us-east-1.amazonaws.com:8080")
+    STARTER = os.getenv("STARTER", "false").lower() == "true"
+    RESPAWNED = os.getenv("RESPAWNED", "false").lower() == "true"
+    
+    # 2. Inizializzazione Server gRPC & Registry Client
+    registry_client = RegistryClient(REGISTRY_ADDR, MY_ID)
+    server, servicer = start_grpc_server(MY_PORT, MY_ID)
+    registry_client.servicer = servicer
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    torch.manual_seed(42)
+    global_model = SentimentPyTorch(num_class=2).to(device)
 
     # ==========================================
-    # 7. Verification / Print Model Hash
+    # REGISTRAZIONE DIVERSIFICATA (RESPAWNED vs NORMAL)
     # ==========================================
-    # Hash dei soli pesi addestrati (es. il classificatore)
-    fc_hash = get_model_hash(global_model, only_trainable=True)
+    initial_status = "working" if STARTER else "idle"
+    
+    is_starter_execution = STARTER
 
-    # Hash di tutti i parametri del modello
-    full_hash = get_model_hash(global_model, only_trainable=False)
+    if not RESPAWNED:
+        if not registry_client.register_node(MY_IP, MY_PORT, initial_status):
+            print("[Fatal] Error connecting to Registry. Exiting.")
+            server.stop(grace=0)
+            return
+    else:
+        print("[Init] Nodo avviato in modalità RESPAWNED.")
+        if not registry_client.register_respawned_node(MY_IP, MY_PORT):
+            print("[Fatal] Error connecting to Registry for respawned node. Exiting.")
+            server.stop(grace=0)
+            return
 
-    print("\n" + "="*10)
-    print(f"[VERIFICATION] Final Model Classifier SHA-256: {fc_hash}")
-    print(f"[VERIFICATION] Final Model Full SHA-256:       {full_hash}")
-    print("="*10 + "\n")
-
-    # 8. Evaluation
-    # check ability to generalize with the data untouched by the users
-    print("Valutazione globale su modello finale")
 
     try:
-        #tokenizza dataset
-        X_full, Mask_full, Y_full = SentimentPyTorch.prepare_eval_dataset(bucket_name, s3_key, TRAINING_NODES)
+        while True:
+            config = None
+            
+            if is_starter_execution:
+                # Flusso STARTER
+                print("\n[Starter] Nodo STARTER. Fase discovery...")
+                
+                training_nodes = int(os.getenv("TRAINING_NODES", 5))
+                total_rounds = int(os.getenv("TOTAL_ROUNDS", 5))
+                start_round = int(os.getenv("START_ROUND", 0))
+                num_peers_required = int(os.getenv("NUM_PEERS_REQUIRED", training_nodes - 1))
+                max_retries = int(os.getenv("MAX_DISCOVERY_RETRIES", 5))
+                timeout_sec = int(os.getenv("WEIGHT_WAIT_TIMEOUT_SECONDS", 30))
 
-        #valuta modello aggregato
-        SentimentPyTorch.evaluate_global(global_model, X_full, Mask_full, Y_full, device)
-    except Exception as e:
-        print(f"[Error] Valutazione globale fallita: {e}")
+                peers = []
+                retries = 0
+                while len(peers) < num_peers_required:
+                    if retries >= max_retries:
+                        print("[Error] Discovery timeout.")
+                        break
+                    print(f"[Discovery] Fetching peers ({retries+1}/{max_retries})...")
+                    peers = registry_client.get_peer_list(node_request_count=num_peers_required)
+                    if len(peers) < num_peers_required:
+                        time.sleep(5)
+                        retries += 1
+                
+                if len(peers) < num_peers_required:
+                    print("[Aborting] Impossibile avviare il training per assenza peer.")
+                else:
+                    config = {
+                        'training_nodes': training_nodes,
+                        'total_rounds': total_rounds,
+                        'start_round': start_round,
+                        'num_peers_required': num_peers_required,
+                        'max_discovery_retries': max_retries,
+                        'weight_wait_timeout': timeout_sec,
+                        'peers': peers
+                    }
+                    
+                    print("[Starter] Invio RPC StartTraining ai peer...")
+                    for peer in peers:
+                        registry_client.send_start_training_signal(peer, config)
+
+                is_starter_execution = False
+
+            else:
+                # Flusso SUPPORT NODE / IDLE
+                print("\n[Idle] In attesa di richieste di addestramento (Timeout: 5 minuti)...")
+                servicer.start_training_event.clear()
+                
+                received_signal = servicer.start_training_event.wait(timeout=300)
+
+                if not received_signal:
+                    print("\n[Timeout] Nessuna richiesta nei 5 minuti di idle. Spegnimento...")
+                    break
+
+                config = servicer.pending_training_config
+                registry_client.update_status("working")
+
+            # Esecuzione Training (passando la flag RESPAWNED)
+            if config:
+                run_training_loop(config, global_model, servicer, registry_client, MY_ID, device, RESPAWNED)
+                RESPAWNED = False
+
+            # RESET DEL MODELLO GLOBALE PER NUOVE ESECUZIONI
+            print("\n[Reset] Reinizializzazione del modello globale per future sessioni...")
+            torch.manual_seed(42)
+            global_model = SentimentPyTorch(num_class=2).to(device)
+
+            # Ripristino stato IDLE
+            print("\n[Status] Ripristino stato a IDLE per 5 minuti...")
+            registry_client.update_status("idle")
+
+    except KeyboardInterrupt:
+        print("\n[Shutdown] Interruzione manuale.")
+    finally:
+        print("[Shutdown] Unregister e arresto gRPC...")
+        registry_client.unregister_node(MY_IP, MY_PORT)
+        server.stop(grace=5)
+        print("[Shutdown] Done.")
     
     
 if __name__ == "__main__":

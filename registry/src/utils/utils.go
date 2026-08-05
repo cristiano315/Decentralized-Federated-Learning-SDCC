@@ -115,8 +115,7 @@ func NodeCount() (int32, error) {
 	return count, nil
 }
 
-// TODO: Add IDLE and WORKING
-func FetchActiveNodes() ([]*pb.NodeInfo, error) {
+func FetchIdleNodes() ([]*pb.NodeInfo, error) {
 	// Using the SDK's default configuration, load additional config
 	// and credentials values from the environment variables, shared
 	// credentials, and shared configuration files
@@ -132,7 +131,14 @@ func FetchActiveNodes() ([]*pb.NodeInfo, error) {
 
 	// Create the paginator
 	paginator := dynamodb.NewScanPaginator(ddb_client, &dynamodb.ScanInput{
-		TableName: aws.String("Nodes"),
+		TableName:        aws.String("Nodes"),
+		FilterExpression: aws.String("#st = :statusVal"),
+		ExpressionAttributeNames: map[string]string{
+			"#st": "Status",
+		},
+		ExpressionAttributeValues: map[string]dbtypes.AttributeValue{
+			":statusVal": &dbtypes.AttributeValueMemberS{Value: "idle"},
+		},
 	})
 
 	// Iterate through pages
@@ -155,6 +161,42 @@ func FetchActiveNodes() ([]*pb.NodeInfo, error) {
 		}
 	}
 	return items, err
+}
+
+func ChangeStatus(nodeId string, new_status string) error {
+	// Using the SDK's default configuration, load additional config
+	// and credentials values from the environment variables, shared
+	// credentials, and shared configuration files
+	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithRegion("us-east-1"))
+	if err != nil {
+		return err
+	}
+
+	// Using the Config value, create the DynamoDB client
+	ddb_client := dynamodb.NewFromConfig(cfg)
+
+	// Define the UpdateItem input
+	input := &dynamodb.UpdateItemInput{
+		TableName: aws.String("Nodes"),
+		// Identify the specific row by its Primary Key
+		Key: map[string]dbtypes.AttributeValue{
+			"NodeId": &dbtypes.AttributeValueMemberS{Value: nodeId},
+		},
+		UpdateExpression: aws.String("SET #st = :newStatusVal"),
+		ExpressionAttributeNames: map[string]string{
+			"#st": "Status",
+		},
+		ExpressionAttributeValues: map[string]dbtypes.AttributeValue{
+			":newStatusVal": &dbtypes.AttributeValueMemberS{Value: new_status},
+		},
+	}
+
+	// Execute the request
+	_, err = ddb_client.UpdateItem(context.TODO(), input)
+	if err != nil {
+		return fmt.Errorf("failed to update node status: %w", err)
+	}
+	return nil
 }
 
 func LaunchTask(cluster string, task string, ammount int32, container string, params []EnvVar) error {

@@ -26,6 +26,29 @@ class FederatedNodeServicer(federated_pb2_grpc.FederatedNodeServicer):
         self.latest_local_weights = None # set up after every local_train in main.py
         self.num_samples = 0 # set up after defining servicer in main.py
         self.round_num = 0 # set up every after every local_train in main.py
+        self.start_training_event = threading.Event()
+        self.pending_training_config = None
+
+    def StartTraining(self, request, context):
+        """
+        RPC chiamata dallo Starter Node per inviare le ENV e la lista dei PEERS
+        a un nodo di supporto (Starter = False).
+        """
+        print(f"[RPC] Ricevuta richiesta StartTraining per sessione avviata da {request.starter_id}")
+        
+        self.pending_training_config = {
+            'training_nodes': request.training_nodes,
+            'total_rounds': request.total_rounds,
+            'start_round': request.start_round,
+            'num_peers_required': request.num_peers_required,
+            'max_discovery_retries': request.max_discovery_retries,
+            'weight_wait_timeout': request.weight_wait_timeout_seconds,
+            'peers': [{'id': p.id, 'ip': p.ip, 'port': p.port} for p in request.peers]
+        }
+        
+        # Sblocchiamo il thread principale che attende in stato IDLE
+        self.start_training_event.set()
+        return federated_pb2.StartTrainingResponse(success=True, message="Training queued")
 
     def remove_peer_by_id(self, peer_id: str):
         """Rimuove un nodo non responsivo dalla lista dei peer locali in modo thread-safe."""
@@ -172,6 +195,31 @@ def send_weights_to_peer(peer_ip: str, peer_port: int, peer_id: str, payload: fe
         # avvisa che e morto, cosi che il registry lo rimuove e ne crea un altro
         return 1 # Failure
 
+def send_start_training_signal(self, peer, config):
+    try:
+        channel = grpc.insecure_channel(f"{peer['ip']}:{peer['port']}")
+        stub = federated_pb2_grpc.FederatedNodeStub(channel)
+        
+        peer_proto_list = [
+            federated_pb2.NodeInfo(node_id=p['id'], ip_address=p['ip'], port=p['port'])
+            for p in config['peers']
+        ]
+        
+        req = federated_pb2.StartTrainingRequest(
+            starter_id=self.my_id,
+            training_nodes=config['training_nodes'],
+            total_rounds=config['total_rounds'],
+            start_round=config['start_round'],
+            num_peers_required=config['num_peers_required'],
+            max_discovery_retries=config['max_discovery_retries'],
+            weight_wait_timeout_seconds=config['weight_wait_timeout'],
+            peers=peer_proto_list
+        )
+        
+        stub.StartTraining(req, timeout=10)
+    except Exception as e:
+        print(f"[Error] Impossibile inviare segnale StartTraining a {peer['id']}: {e}")
+
 # =====================================================================
 # REGISTRY CALLS
 # =====================================================================
@@ -185,7 +233,7 @@ class RegistryClient:
         self.my_id = my_id
         self.servicer = servicer
 
-    def register_node(self, my_ip: str, my_port: int) -> bool:
+    def register_node(self, my_ip: str, my_port: int, status: str) -> bool:
         """
         Registers this node with the central Go Service Registry.
         """
@@ -200,7 +248,7 @@ class RegistryClient:
                     node_id=self.my_id,
                     ip_address=str(my_ip),
                     port=int(my_port),
-                    status="idle"
+                    status=status
                 )
                 response = stub.RegisterNode(payload)
                 print(f"[RPC] Registration success: {response.message}")
@@ -325,4 +373,33 @@ class RegistryClient:
                 return response.success
         except grpc.RpcError as e:
             print(f"[RPC Error] Failed to signal unresponsive node: {e.details()}")
+            return False
+
+    def update_status(self, new_status: str) -> bool:
+        """
+        Invia una richiesta RPC al Go Registry per aggiornare lo stato del nodo ("idle" o "working").
+        """
+        try:
+            req = federated_pb2.ChangeStatusRequest(
+                node_id=self.my_id,
+                new_status=new_status
+            )
+            
+            # Utilizziamo uno stub temporaneo con timeout breve (5 secondi)
+            with grpc.insecure_channel(self.registry_addr) as channel:
+                stub = federated_pb2_grpc.RegistryServiceStub(channel)
+                response = stub.ChangeNodeStatus(req, timeout=5)
+                
+                if response.success:
+                    print(f"[RegistryClient] Stato aggiornato con successo a '{new_status}'.")
+                    return True
+                else:
+                    print(f"[RegistryClient] Errore aggiornamento stato: {response.message}")
+                    return False
+
+        except grpc.RpcError as e:
+            print(f"[RegistryClient Error] Impossibile aggiornare lo stato su Registry: {e.details()}")
+            return False
+        except Exception as e:
+            print(f"[RegistryClient Error] Eccezione generica durante update_status: {e}")
             return False
