@@ -165,6 +165,7 @@ def run_training_loop(config, global_model, servicer, registry_client, MY_ID, de
 
             # D. Wait Weights
             start_wait_time = time.time()
+            print(f"[Wait] In attesa dei pesi dai peer per il round {round_num + 1} (Timeout: {weight_wait_timeout}s)...")
             while True:
                 with servicer.lock:
                     current_round_weights = servicer.received_weights.get(round_num, [])
