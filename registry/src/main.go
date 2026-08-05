@@ -147,12 +147,12 @@ func (s *registryServer) RegisterRespawnedNode(ctx context.Context, req *pb.Node
     }, nil
 }
 
-// Discover handles requests from nodes asking for the list of peers.
+// Discover handles requests from nodes asking for the list of idle peers.
 func (s *registryServer) DiscoverNodes(ctx context.Context, req *pb.DiscoverRequest) (*pb.DiscoverResponse, error) {
-	// 1. PING DEI NODI IN MEMORIA
+	// 1. PING DEI SOLI NODI IN MEMORIA IN STATO IDLE (ESCLUDENDO IL RICHIEDENTE)
+	s.mu.RLock()
 	nodesToPing := make([]*pb.NodeInfo, 0, len(s.nodes))
 	for id, node := range s.nodes {
-		// Pingo SOLO i nodi in stato "idle" ed escludo chi fa la richiesta
 		if id != req.NodeId && node.Status == "idle" {
 			nodesToPing = append(nodesToPing, node)
 		}
@@ -168,7 +168,6 @@ func (s *registryServer) DiscoverNodes(ctx context.Context, req *pb.DiscoverRequ
 		go func(n *pb.NodeInfo) {
 			defer wgMem.Done()
 			
-			// Retry di cortesia prima di dichiarare morto un nodo
 			isAlive := false
 			for attempt := 1; attempt <= 3; attempt++ {
 				if pingNode(n) {
@@ -192,7 +191,7 @@ func (s *registryServer) DiscoverNodes(ctx context.Context, req *pb.DiscoverRequ
 	}
 	wgMem.Wait()
 
-	// Pulizia dei nodi non raggiungibili dalla mappa in memoria
+	// Pulizia nodi morti
 	if len(deadMemNodeIDs) > 0 {
 		s.mu.Lock()
 		for _, id := range deadMemNodeIDs {
@@ -201,66 +200,64 @@ func (s *registryServer) DiscoverNodes(ctx context.Context, req *pb.DiscoverRequ
 		s.mu.Unlock()
 	}
 
-	// 2. CONTEGGIO NODI IDLE IN MEMORIA
-	s.mu.RLock()
+	// 2. CONTEGGIO IDLE E PENDING (CON LOCK APPOSTA)
+	s.mu.Lock() // <-- INIZIO LOCK ESCLUSIVO PER IL CONTEGGIO
 	currentIdleCount := 0
 	for id, node := range s.nodes {
 		if id != req.NodeId && node.Status == "idle" {
 			currentIdleCount++
 		}
 	}
-	currentPending := s.pendingNodes
-	s.mu.RUnlock()
+
+	if s.pendingNodes < 0 {
+		s.pendingNodes = 0
+	}
 
 	requiredPeers := int(req.RequestCount)
-	missing := requiredPeers - (currentIdleCount + currentPending)
+	missing := requiredPeers - (currentIdleCount + s.pendingNodes)
+	s.mu.Unlock() // <-- FINE LOCK ESCLUSIVO
 
-	// 3. RECUPERO NODI SE MANCANTI
+	// 3. RECUPERO DA DYNAMODB SE MANCANO NODI
 	if missing > 0 {
-		// Fetch solo dei nodi idle da DynamoDB
 		dynamoNodes, err := utils.FetchIdleNodes()
-		if err != nil {
-			log.Printf("[ERROR] Error fetching idle nodes from DynamoDB: %v", err)
-			return nil, fmt.Errorf("failed to fetch idle nodes from DynamoDB")
-		}
+		if err == nil && len(dynamoNodes) > 0 {
+			var newlyDiscovered []*pb.NodeInfo
+			var wgDynamo sync.WaitGroup
+			var aliveMu sync.Mutex
 
-		var newlyDiscovered []*pb.NodeInfo
-		var wgDynamo sync.WaitGroup
-		var aliveMu sync.Mutex
+			for _, node := range dynamoNodes {
+				s.mu.RLock()
+				_, alreadyInMem := s.nodes[node.NodeId]
+				s.mu.RUnlock()
 
-		for _, node := range dynamoNodes {
-			// Se già presente in memoria, salta il ping
-			s.mu.RLock()
-			_, alreadyInMem := s.nodes[node.NodeId]
-			s.mu.RUnlock()
-
-			if alreadyInMem {
-				continue
-			}
-
-			wgDynamo.Add(1)
-			go func(n *pb.NodeInfo) {
-				defer wgDynamo.Done()
-				if pingNode(n) {
-					aliveMu.Lock()
-					newlyDiscovered = append(newlyDiscovered, n)
-					aliveMu.Unlock()
-				} else {
-					log.Printf("[DISCOVERY] Node %s unreachable. Ignoring and removing from DynamoDB.", n.NodeId)
-					utils.RemoveNode(n.NodeId)
+				if alreadyInMem || node.NodeId == req.NodeId {
+					continue
 				}
-			}(node)
+
+				wgDynamo.Add(1)
+				go func(n *pb.NodeInfo) {
+					defer wgDynamo.Done()
+					if pingNode(n) {
+						aliveMu.Lock()
+						newlyDiscovered = append(newlyDiscovered, n)
+						aliveMu.Unlock()
+					} else {
+						log.Printf("[DISCOVERY] Node %s unreachable in DynamoDB. Removing.", n.NodeId)
+						utils.RemoveNode(n.NodeId)
+					}
+				}(node)
+			}
+			wgDynamo.Wait()
+
+			s.mu.Lock()
+			for _, node := range newlyDiscovered {
+				s.nodes[node.NodeId] = node
+			}
+			s.mu.Unlock()
 		}
 
-		wgDynamo.Wait()
-
-		// Aggiunge i nuovi nodi idle scoperti alla mappa in memoria
-		s.mu.Lock()
-		for _, node := range newlyDiscovered {
-			s.nodes[node.NodeId] = node
-		}
-
-		// Ricalcola quanti nodi mancano ancora
+		// RICALCOLO DOPO DYNAMODB
+		s.mu.Lock() // <-- PRENDIAMO IL LOCK PRIMA DI RICALCOLARE
 		idleCountNow := 0
 		for id, node := range s.nodes {
 			if id != req.NodeId && node.Status == "idle" {
@@ -268,29 +265,33 @@ func (s *registryServer) DiscoverNodes(ctx context.Context, req *pb.DiscoverRequ
 			}
 		}
 		missingNow := requiredPeers - (idleCountNow + s.pendingNodes)
-		s.mu.Unlock()
 
-		// Se mancano ancora nodi, ne istanzia di nuovi tramite ECS
 		if missingNow > 0 {
-			s.raiseRequiredNodes(missingNow)
+			log.Printf("[DISCOVERY] Required IDLE: %d. Found IDLE: %d. Pending: %d. Raising missing: %d",
+				requiredPeers, idleCountNow, s.pendingNodes, missingNow)
+			s.pendingNodes += missingNow
+			s.mu.Unlock() // <-- RILASCIAMO DOPO L'AGGIORNAMENTO DI PENDINGNODES
+
+			go s.raiseRequiredNodes(missingNow)
+		} else {
+			s.mu.Unlock() // <-- RILASCIAMO SE NON SERVONO ALTRI NODI
 		}
 	}
 
-	// 4. ATTESA CHE CI SIANO ABBASTANZA NODI IDLE
+	// 4. ATTESA CHE I NODI SIANO REGISTRATI E PRONTI IN STATO IDLE
 	s.WaitIdleNodes(requiredPeers, req.NodeId)
 
-	// 5. PREPARAZIONE DELLA LISTA DEI PEER (SOLO NODI IDLE)
+	// 5. RESTITUZIONE PEER LIST (SOLO IDLE)
 	var peerList []*pb.NodeInfo
 	s.mu.RLock()
 	for _, node := range s.nodes {
-		// Esclude lo starter richiedente e include SOLAMENTE i nodi con stato "idle"
 		if node.NodeId != req.NodeId && node.Status == "idle" {
 			peerList = append(peerList, node)
 		}
 	}
 	s.mu.RUnlock()
 
-	log.Printf("[DISCOVERY] Node %s requested peers. Returning %d IDLE peers.", req.NodeId, len(peerList))
+	log.Printf("[DISCOVERY] Node %s requested %d peers. Returning %d IDLE peers.", req.NodeId, requiredPeers, len(peerList))
 
 	return &pb.DiscoverResponse{
 		Nodes: peerList,
@@ -566,6 +567,7 @@ func main() {
 	myServer := &registryServer{
 		nodes: make(map[string]*pb.NodeInfo),
 		respawningNodes: make(map[string]bool),
+		currentClientID: 1,
 	}
 	myServer.cond = sync.NewCond(&myServer.mu)
 

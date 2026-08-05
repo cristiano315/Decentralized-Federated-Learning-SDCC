@@ -170,6 +170,7 @@ def run_training_loop(config, global_model, servicer, registry_client, MY_ID, de
                 with servicer.lock:
                     current_round_weights = servicer.received_weights.get(round_num, [])
                     if len(current_round_weights) >= len(peers):
+                        print(f"[Info] Tutti i pesi ricevuti dai peer per il round {round_num + 1}.")
                         break
 
                 if time.time() - start_wait_time > weight_wait_timeout:
