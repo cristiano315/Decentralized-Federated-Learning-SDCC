@@ -337,7 +337,11 @@ def main():
 
             # Esecuzione Training (passando la flag RESPAWNED)
             if config:
-                run_training_loop(config, global_model, servicer, registry_client, MY_ID, device, RESPAWNED)
+                try:
+                    run_training_loop(
+                        config, global_model, servicer, registry_client, MY_ID, device, RESPAWNED)
+                except Exception as e:
+                    print(f"[Error Main] Errore durante l'esecuzione del training: {e}")
                 RESPAWNED = False
 
             # RESET DEL MODELLO GLOBALE PER NUOVE ESECUZIONI

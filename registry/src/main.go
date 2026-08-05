@@ -150,10 +150,12 @@ func (s *registryServer) RegisterRespawnedNode(ctx context.Context, req *pb.Node
 // Discover handles requests from nodes asking for the list of peers.
 func (s *registryServer) DiscoverNodes(ctx context.Context, req *pb.DiscoverRequest) (*pb.DiscoverResponse, error) {
 	// 1. PING DEI NODI IN MEMORIA
-	s.mu.RLock()
-	nodesInMem := make([]*pb.NodeInfo, 0, len(s.nodes))
-	for _, node := range s.nodes {
-		nodesInMem = append(nodesInMem, node)
+	nodesToPing := make([]*pb.NodeInfo, 0, len(s.nodes))
+	for id, node := range s.nodes {
+		// Pingo SOLO i nodi in stato "idle" ed escludo chi fa la richiesta
+		if id != req.NodeId && node.Status == "idle" {
+			nodesToPing = append(nodesToPing, node)
+		}
 	}
 	s.mu.RUnlock()
 
@@ -161,14 +163,14 @@ func (s *registryServer) DiscoverNodes(ctx context.Context, req *pb.DiscoverRequ
 	var deadMemNodesMu sync.Mutex
 	var deadMemNodeIDs []string
 
-	for _, node := range nodesInMem {
+	for _, node := range nodesToPing {
 		wgMem.Add(1)
 		go func(n *pb.NodeInfo) {
 			defer wgMem.Done()
 			
-			// Retry fino a 3 volte con un intervallo di 500ms
+			// Retry di cortesia prima di dichiarare morto un nodo
 			isAlive := false
-			for attempt := 0; attempt < 3; attempt++ {
+			for attempt := 1; attempt <= 3; attempt++ {
 				if pingNode(n) {
 					isAlive = true
 					break
@@ -177,12 +179,11 @@ func (s *registryServer) DiscoverNodes(ctx context.Context, req *pb.DiscoverRequ
 			}
 
 			if !isAlive {
-				log.Printf("[DISCOVERY] In-memory node %s unreachable. Removing.", n.NodeId)
+				log.Printf("[DISCOVERY] In-memory idle peer %s unreachable. Removing.", n.NodeId)
 				deadMemNodesMu.Lock()
 				deadMemNodeIDs = append(deadMemNodeIDs, n.NodeId)
 				deadMemNodesMu.Unlock()
 
-				// Rimuove il nodo non raggiungibile anche da DynamoDB
 				if err := utils.RemoveNode(n.NodeId); err != nil {
 					log.Printf("[ERROR] Failed to remove dead node %s from DynamoDB: %v", n.NodeId, err)
 				}
