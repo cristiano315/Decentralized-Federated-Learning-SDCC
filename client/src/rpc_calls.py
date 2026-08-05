@@ -199,7 +199,8 @@ class RegistryClient:
                 payload = federated_pb2.NodeInfo(
                     node_id=self.my_id,
                     ip_address=str(my_ip),
-                    port=int(my_port)
+                    port=int(my_port),
+                    status="idle"
                 )
                 response = stub.RegisterNode(payload)
                 print(f"[RPC] Registration success: {response.message}")
@@ -222,7 +223,8 @@ class RegistryClient:
                 payload = federated_pb2.NodeInfo(
                     node_id=self.my_id,
                     ip_address=str(my_ip),
-                    port=int(my_port)
+                    port=int(my_port),
+                    status="working"
                 )
                 response = stub.RegisterRespawnedNode(payload)
                 print(f"[RPC] Respawned registration success: {response.message}")
@@ -288,7 +290,8 @@ class RegistryClient:
                 payload = federated_pb2.NodeInfo(
                     node_id=self.my_id,
                     ip_address=str(my_ip),
-                    port=int(my_port)
+                    port=int(my_port),
+                    status="idle"
                 )
                 response = stub.UnregisterNode(payload)
                 print(f"[RPC] Unregistration success: {response.message}")

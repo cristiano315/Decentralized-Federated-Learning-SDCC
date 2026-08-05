@@ -58,6 +58,7 @@ message NodeInfo {
     string node_id = 1; // Unique identifier for the node
     string ip_address = 2; // IP address of the node
     int32 port = 3; // Port number for communication
+    string status = 4; // Status of the node (e.g., "idle", "working")
 }
 
 // Full node info for fault recovery

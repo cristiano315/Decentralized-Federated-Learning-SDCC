@@ -429,6 +429,7 @@ func pingNode(node *pb.NodeInfo) bool {
 		NodeId:    node.NodeId,
 		IpAddress: node.IpAddress,
 		Port:      node.Port,
+		Status:    node.Status,
 	}
 
 	resp, err := client.Ping(ctx, req)
@@ -457,6 +458,7 @@ func signalNewNode(oldNode *pb.NodeInfo, newNode *pb.NodeInfo) bool {
 		NodeId:    newNode.NodeId,
 		IpAddress: newNode.IpAddress,
 		Port:      newNode.Port,
+		Status:    newNode.Status,
 	}
 
 	resp, err := client.NotifyUnresponsiveNode(ctx, req)
