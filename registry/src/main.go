@@ -165,7 +165,18 @@ func (s *registryServer) DiscoverNodes(ctx context.Context, req *pb.DiscoverRequ
 		wgMem.Add(1)
 		go func(n *pb.NodeInfo) {
 			defer wgMem.Done()
-			if !pingNode(n) {
+			
+			// Retry fino a 3 volte con un intervallo di 500ms
+			isAlive := false
+			for attempt := 0; attempt < 3; attempt++ {
+				if pingNode(n) {
+					isAlive = true
+					break
+				}
+				time.Sleep(500 * time.Millisecond)
+			}
+
+			if !isAlive {
 				log.Printf("[DISCOVERY] In-memory node %s unreachable. Removing.", n.NodeId)
 				deadMemNodesMu.Lock()
 				deadMemNodeIDs = append(deadMemNodeIDs, n.NodeId)

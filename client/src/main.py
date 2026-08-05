@@ -316,7 +316,7 @@ def main():
                     
                     print("[Starter] Invio RPC StartTraining ai peer...")
                     for peer in peers:
-                        registry_client.send_start_training_signal(peer, config)
+                        servicer.send_start_training_signal(peer, config)
 
                 is_starter_execution = False
 

@@ -35,6 +35,15 @@ class FederatedNodeServicer(federated_pb2_grpc.FederatedNodeServicer):
         a un nodo di supporto (Starter = False).
         """
         print(f"[RPC] Ricevuta richiesta StartTraining per sessione avviata da {request.starter_id}")
+
+        peers_list = [
+                {
+                    'id': p.node_id,       # NON p.id
+                    'ip': p.ip_address,    # NON p.ip
+                    'port': p.port
+                } 
+                for p in request.peers
+        ]
         
         self.pending_training_config = {
             'training_nodes': request.training_nodes,
@@ -43,12 +52,12 @@ class FederatedNodeServicer(federated_pb2_grpc.FederatedNodeServicer):
             'num_peers_required': request.num_peers_required,
             'max_discovery_retries': request.max_discovery_retries,
             'weight_wait_timeout': request.weight_wait_timeout_seconds,
-            'peers': [{'id': p.id, 'ip': p.ip, 'port': p.port} for p in request.peers]
+            'peers': peers_list
         }
         
         # Sblocchiamo il thread principale che attende in stato IDLE
         self.start_training_event.set()
-        return federated_pb2.StartTrainingResponse(success=True, message="Training queued")
+        return federated_pb2.Ack(success=True, message="Training queued")
 
     def remove_peer_by_id(self, peer_id: str):
         """Rimuove un nodo non responsivo dalla lista dei peer locali in modo thread-safe."""
@@ -175,6 +184,44 @@ class FederatedNodeServicer(federated_pb2_grpc.FederatedNodeServicer):
             print(f"Failed to request weights from {peer_address}: {e.code()}")
             return None
 
+    def ping(self, request, context):
+        """
+        RPC method to respond to ping requests from the registry.
+        """
+        if request.node_id == self.my_id:
+            return federated_pb2.Ack(success=True, message="Node is alive")
+
+    def send_start_training_signal(self, peer, config):
+        try:
+            channel = grpc.insecure_channel(f"{peer['ip']}:{peer['port']}")
+            stub = federated_pb2_grpc.FederatedNodeStub(channel)
+            
+            peer_proto_list = [
+                federated_pb2.NodeInfo(
+                    node_id=p['id'], 
+                    ip_address=p['ip'], 
+                    port=p['port'],
+                    status="idle"
+                )
+                for p in config['peers']
+            ]
+            
+            req = federated_pb2.StartTrainingRequest(
+                starter_id=self.my_id,
+                training_nodes=config['training_nodes'],
+                total_rounds=config['total_rounds'],
+                start_round=config['start_round'],
+                num_peers_required=config['num_peers_required'],
+                max_discovery_retries=config['max_discovery_retries'],
+                weight_wait_timeout_seconds=config['weight_wait_timeout'],
+                peers=peer_proto_list
+            )
+            
+            response = stub.StartTraining(req, timeout=10)
+            return response.success
+        except Exception as e:
+            print(f"[Error] Impossibile inviare segnale StartTraining a {peer['id']}: {e}")
+
 
 def send_weights_to_peer(peer_ip: str, peer_port: int, peer_id: str, payload: federated_pb2.WeightPayload):
     """
@@ -195,30 +242,6 @@ def send_weights_to_peer(peer_ip: str, peer_port: int, peer_id: str, payload: fe
         # avvisa che e morto, cosi che il registry lo rimuove e ne crea un altro
         return 1 # Failure
 
-def send_start_training_signal(self, peer, config):
-    try:
-        channel = grpc.insecure_channel(f"{peer['ip']}:{peer['port']}")
-        stub = federated_pb2_grpc.FederatedNodeStub(channel)
-        
-        peer_proto_list = [
-            federated_pb2.NodeInfo(node_id=p['id'], ip_address=p['ip'], port=p['port'])
-            for p in config['peers']
-        ]
-        
-        req = federated_pb2.StartTrainingRequest(
-            starter_id=self.my_id,
-            training_nodes=config['training_nodes'],
-            total_rounds=config['total_rounds'],
-            start_round=config['start_round'],
-            num_peers_required=config['num_peers_required'],
-            max_discovery_retries=config['max_discovery_retries'],
-            weight_wait_timeout_seconds=config['weight_wait_timeout'],
-            peers=peer_proto_list
-        )
-        
-        stub.StartTraining(req, timeout=10)
-    except Exception as e:
-        print(f"[Error] Impossibile inviare segnale StartTraining a {peer['id']}: {e}")
 
 # =====================================================================
 # REGISTRY CALLS
@@ -304,13 +327,6 @@ class RegistryClient:
         except grpc.RpcError as e:
             print(f"[RPC Error] Discovery failed: {e.details()}")
             return []
-        
-    def ping(self, request, context):
-        """
-        RPC method to respond to ping requests from the registry.
-        """
-        if request.node_id == self.my_id:
-            return federated_pb2.Ack(success=True, message="Node is alive")
 
     def NotifyUnresponsiveNode(self, request, context):
         """
@@ -385,8 +401,10 @@ class RegistryClient:
                 new_status=new_status
             )
             
-            # Utilizziamo uno stub temporaneo con timeout breve (5 secondi)
-            with grpc.insecure_channel(self.registry_addr) as channel:
+            target = self.registry_address
+            if not target.startswith("dns:///") and not target.startswith("ipv4:"):
+                target = f"dns:///{target}"
+            with grpc.insecure_channel(target) as channel:
                 stub = federated_pb2_grpc.RegistryServiceStub(channel)
                 response = stub.ChangeNodeStatus(req, timeout=5)
                 
