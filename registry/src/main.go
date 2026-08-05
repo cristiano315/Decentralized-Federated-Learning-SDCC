@@ -139,6 +139,46 @@ func (s *registryServer) RegisterRespawnedNode(ctx context.Context, req *pb.Node
 
 // Discover handles requests from nodes asking for the list of peers.
 func (s *registryServer) DiscoverNodes(ctx context.Context, req *pb.DiscoverRequest) (*pb.DiscoverResponse, error) {
+	// PING DEI NODI IN MEMORIA
+	s.mu.RLock()
+	nodesInMem := make([]*pb.NodeInfo, 0, len(s.nodes))
+	for _, node := range s.nodes {
+		nodesInMem = append(nodesInMem, node)
+	}
+	s.mu.RUnlock()
+
+	var wgMem sync.WaitGroup
+	var deadMemNodesMu sync.Mutex
+	var deadMemNodeIDs []string
+
+	for _, node := range nodesInMem {
+		wgMem.Add(1)
+		go func(n *pb.NodeInfo) {
+			defer wgMem.Done()
+			if !pingNode(n) {
+				log.Printf("[DISCOVERY] In-memory node %s unreachable. Removing.", n.NodeId)
+				deadMemNodesMu.Lock()
+				deadMemNodeIDs = append(deadMemNodeIDs, n.NodeId)
+				deadMemNodesMu.Unlock()
+				
+				// Rimuove il nodo non raggiungibile anche da DynamoDB
+				if err := utils.RemoveNode(n.NodeId); err != nil {
+					log.Printf("[ERROR] Failed to remove dead node %s from DynamoDB: %v", n.NodeId, err)
+				}
+			}
+		}(node)
+	}
+	wgMem.Wait()
+
+	// Pulizia dei nodi non raggiungibili dalla mappa in memoria
+	if len(deadMemNodeIDs) > 0 {
+		s.mu.Lock()
+		for _, id := range deadMemNodeIDs {
+			delete(s.nodes, id)
+		}
+		s.mu.Unlock()
+	}
+
 	// Read-Lock the map (multiple clients can read simultaneously without blocking each other)
 	s.mu.RLock()
 	currentNodesLen := len(s.nodes)
@@ -159,7 +199,7 @@ func (s *registryServer) DiscoverNodes(ctx context.Context, req *pb.DiscoverRequ
 
 		// Filter out dead nodes from the fetched list and remove them from DynamoDB. Parallel ping
 		var newlyDiscovered []*pb.NodeInfo
-		var wg sync.WaitGroup
+		var wgDynamo sync.WaitGroup
 		var aliveMu sync.Mutex
 
 		for _, node := range dynamoNodes {
@@ -172,9 +212,9 @@ func (s *registryServer) DiscoverNodes(ctx context.Context, req *pb.DiscoverRequ
 				continue
 			}
 
-			wg.Add(1)
+			wgDynamo.Add(1)
 			go func(n *pb.NodeInfo) {
-				defer wg.Done()
+				defer wgDynamo.Done()
 				if pingNode(n) {
 					aliveMu.Lock()
 					newlyDiscovered = append(newlyDiscovered, n)
@@ -187,7 +227,7 @@ func (s *registryServer) DiscoverNodes(ctx context.Context, req *pb.DiscoverRequ
 		}
 
 		// Wait for all pings to finish
-		wg.Wait()
+		wgDynamo.Wait()
 
 		// Add the newly discovered nodes to the in-memory map and update the count of missing nodes
 		s.mu.Lock()
