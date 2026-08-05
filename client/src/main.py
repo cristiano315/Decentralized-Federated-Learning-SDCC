@@ -58,7 +58,7 @@ def main():
     MY_ID = str(os.getenv("CLIENT_ID"))
     MY_IP = get_ecs_container_ip()
     MY_PORT = int(os.getenv("PORT", 50051))
-    REGISTRY_ADDR = os.getenv("REGISTRY_ADRESS")
+    REGISTRY_ADDR = os.getenv("REGISTRY_ADRESS", "registry-nlb-ba1dc354920c500b.elb.us-east-1.amazonaws.com:8080")
     TRAINING_NODES = int(os.getenv("TRAINING_NODES", 5))
     TOTAL_ROUNDS = int(os.getenv("TOTAL_ROUNDS", 5))
     START_ROUND = int(os.getenv("START_ROUND", 0))

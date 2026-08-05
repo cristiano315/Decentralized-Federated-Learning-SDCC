@@ -190,8 +190,11 @@ class RegistryClient:
         Registers this node with the central Go Service Registry.
         """
         print(f"DEBUG ip:{my_ip}, with type: {type(my_ip)}, port: {my_port}, with type: {type(my_port)}. Registry address: {self.registry_address}, with type: {type(self.registry_address)}")
+        target = self.registry_address
+        if not target.startswith("dns:///") and not target.startswith("ipv4:"):
+            target = f"dns:///{target}"
         try:
-            with grpc.insecure_channel(self.registry_address) as channel:
+            with grpc.insecure_channel(target) as channel:
                 stub = federated_pb2_grpc.RegistryServiceStub(channel)
                 payload = federated_pb2.NodeInfo(
                     node_id=self.my_id,
@@ -210,8 +213,11 @@ class RegistryClient:
         Registers this node with the central Go Service Registry after a crash.
         """
         print(f"DEBUG ip:{my_ip}, with type: {type(my_ip)}, port: {my_port}, with type: {type(my_port)}. Registry address: {self.registry_address}, with type: {type(self.registry_address)}")
+        target = self.registry_address
+        if not target.startswith("dns:///") and not target.startswith("ipv4:"):
+            target = f"dns:///{target}"
         try:
-            with grpc.insecure_channel(self.registry_address) as channel:
+            with grpc.insecure_channel(target) as channel:
                 stub = federated_pb2_grpc.RegistryServiceStub(channel)
                 payload = federated_pb2.NodeInfo(
                     node_id=self.my_id,
@@ -230,7 +236,10 @@ class RegistryClient:
         Fetches the list of active peers from the Service Registry.
         """
         try:
-            with grpc.insecure_channel(self.registry_address) as channel:
+            target = self.registry_address
+            if not target.startswith("dns:///") and not target.startswith("ipv4:"):
+                target = f"dns:///{target}"
+            with grpc.insecure_channel(target) as channel:
                 stub = federated_pb2_grpc.RegistryServiceStub(channel)
                 request = federated_pb2.DiscoverRequest(
                     node_id=self.my_id,
@@ -271,7 +280,10 @@ class RegistryClient:
         Unregisters this node with the central Go Service Registry.
         """
         try:
-            with grpc.insecure_channel(self.registry_address) as channel:
+            target = self.registry_address
+            if not target.startswith("dns:///") and not target.startswith("ipv4:"):
+                target = f"dns:///{target}"
+            with grpc.insecure_channel(target) as channel:
                 stub = federated_pb2_grpc.RegistryServiceStub(channel)
                 payload = federated_pb2.NodeInfo(
                     node_id=self.my_id,
@@ -290,7 +302,10 @@ class RegistryClient:
         Signals to the registry that a peer node is unresponsive.
         """
         try:
-            with grpc.insecure_channel(self.registry_address) as channel:
+            target = self.registry_address
+            if not target.startswith("dns:///") and not target.startswith("ipv4:"):
+                target = f"dns:///{target}"
+            with grpc.insecure_channel(target) as channel:
                 stub = federated_pb2_grpc.RegistryServiceStub(channel)
                 payload = federated_pb2.FullNodeInfo(
                     node_id=peer_id,

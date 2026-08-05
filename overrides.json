@@ -1,0 +1,19 @@
+{
+  "containerOverrides": [
+    {
+      "name": "client_container",
+      "environment": [
+        { "name": "CLIENT_ID", "value": "node-1" },
+        { "name": "TRAINING_NODES", "value": "5" },
+        { "name": "PORT", "value": "8080" },
+        { "name": "TOTAL_ROUNDS", "value": "10" },
+        { "name": "START_ROUND", "value": "0" },
+        { "name": "NUM_PEERS_REQUIRED", "value": "5" },
+        { "name": "MAX_DISCOVERY_RETRIES", "value": "3" },
+        { "name": "WEIGHT_WAIT_TIMEOUT_SECONDS", "value": "30" },
+        { "name": "REGISTRY_ADRESS", "value": "registry-nlb-123456789.elb.us-east-1.amazonaws.com:8080" },
+        { "name": "RESPAWNED", "value": "true" }
+      ]
+    }
+  ]
+}
