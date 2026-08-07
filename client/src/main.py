@@ -61,6 +61,7 @@ def run_training_loop(config, global_model, servicer, registry_client, MY_ID, de
     start_round = config['start_round']
     peers = config['peers']
     weight_wait_timeout = config['weight_wait_timeout']
+    training_set_percentage = config['training_set_percentage']
     
     # 1. Preparazione Dataset
     bucket_name = "sdcc-dataset-771379920513-us-east-1-an"
@@ -160,7 +161,7 @@ def run_training_loop(config, global_model, servicer, registry_client, MY_ID, de
                     peers = servicer.peers
                     registry_client.signal_unresponsive_node(
                         peer['ip'], peer['port'], peer['id'], 
-                        training_nodes, total_rounds, start_round, 5, weight_wait_timeout
+                        training_nodes, total_rounds, start_round, 5, weight_wait_timeout, training_set_percentage
                     )
 
             # D. Wait Weights
@@ -290,6 +291,7 @@ def main():
                 num_peers_required = int(os.getenv("NUM_PEERS_REQUIRED", training_nodes - 1))
                 max_retries = int(os.getenv("MAX_DISCOVERY_RETRIES", 5))
                 timeout_sec = int(os.getenv("WEIGHT_WAIT_TIMEOUT_SECONDS", 30))
+                training_set_percentage = float(os.getenv("TRAINING_SET_PERCENTAGE", 0.7))
 
                 peers = []
                 retries = 0
@@ -313,6 +315,7 @@ def main():
                         'num_peers_required': num_peers_required,
                         'max_discovery_retries': max_retries,
                         'weight_wait_timeout': timeout_sec,
+                        'training_set_percentage': training_set_percentage,
                         'peers': peers
                     }
                     

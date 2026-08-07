@@ -69,20 +69,28 @@ class SentimentPyTorch(nn.Module):
         # SELEZIONE DEL DATASET CIRCOLARE BASATA SUL CLIENT ID
         # ---------------------------------------------------------
         client_id = int(os.getenv("CLIENT_ID", 1))
-        samples_per_client = 500
+        num_training_nodes = int(os.getenv("TRAINING_NODES", 5))
+        training_set_percentage = float(os.getenv("TRAINING_SET_PERCENTAGE", 0.7))
+        max_samples_per_client = 1000
         total_original = len(texts)
+        training_length = int(total_original * training_set_percentage)
+        # divisione intera tra numero originale e il numero di dati di training
+        real_samples_per_client = (training_length // num_training_nodes)
+        truncated_training_length = real_samples_per_client * num_training_nodes
+
+        samples_per_client = real_samples_per_client if real_samples_per_client <= max_samples_per_client else max_samples_per_client
 
         # Usiamo il modulo % per far ripartire gli indici dall'inizio se superano il totale
-        start_idx = ((client_id - 1) * samples_per_client) % total_original
+        start_idx = ((client_id - 1) * real_samples_per_client) % (truncated_training_length)
         end_idx = start_idx + samples_per_client
 
         # Taglio circolare nel caso in cui il blocco superi la fine della lista
-        if end_idx <= total_original:
+        if end_idx <= truncated_training_length:
             texts = texts[start_idx:end_idx]
             labels = labels[start_idx:end_idx]
         else:
             # Prende la parte finale e la unisce con la parte iniziale
-            remainder = end_idx - total_original
+            remainder = end_idx - truncated_training_length
             texts = texts[start_idx:] + texts[:remainder]
             labels = labels[start_idx:] + labels[:remainder]
 
@@ -203,7 +211,7 @@ class SentimentPyTorch(nn.Module):
 
     @staticmethod
     def prepare_eval_dataset(bucket_name, s3_key, training_nodes):
-        """Carica tokenizza un decimo del dataset (non usato per il training) per la valutazione finale."""
+        """Carica e tokenizza i dati per la valutazione, pescando dalla porzione NON usata per il training."""
         print("[Global Eval] Caricamento intero dataset JSON da S3...")
         s3 = boto3.client('s3')
         response = s3.get_object(Bucket=bucket_name, Key=s3_key)
@@ -216,38 +224,45 @@ class SentimentPyTorch(nn.Module):
                 labels.append(1 if label == 4 else label)
 
         # ---------------------------------------------------------
-        # SELEZIONE DI 1/10 DEL DATASET (DATI NON VISTI)
+        # SELEZIONE DEL DATASET DI VALUTAZIONE (Zero Data Leakage)
         # ---------------------------------------------------------
         total_original = len(texts)
-        samples_per_client = 500
-        used_samples = training_nodes * samples_per_client
-        eval_samples_count = total_original // 10  # Prende un decimo dei dati totali
-
-        print(f"[Global Eval] Totale campioni dataset: {total_original}. Campioni usati in training: {used_samples}.")
         
-        # Partiamo da dove sono arrivati i client
-        start_idx = used_samples % total_original
-        end_idx = start_idx + eval_samples_count
+        # Ricostruiamo il limite del set di training per evitare sovrapposizioni
+        training_set_percentage = float(os.getenv("TRAINING_SET_PERCENTAGE", 0.7))
+        client_id = int(os.getenv("CLIENT_ID", 1))
+        eval_set_percentage = 1 - training_set_percentage
+        eval_length = int(total_original * eval_set_percentage)
+        eval_samples_per_client = eval_length // training_nodes
 
-        # Stessa logica di taglio circolare usata nel train_local in caso si superi la fine della lista
-        if end_idx <= total_original:
-            texts = texts[start_idx:end_idx]
-            labels = labels[start_idx:end_idx]
-        else:
-            remainder = end_idx - total_original
-            texts = texts[start_idx:] + texts[:remainder]
-            labels = labels[start_idx:] + labels[:remainder]
+        training_length = int(total_original * training_set_percentage)
+        real_samples_per_client = (training_length // training_nodes)
+        truncated_training_length = real_samples_per_client * training_nodes
 
-        print(f"[Global Eval] Selezionati {len(texts)} campioni per la valutazione (1/10 del totale, dall'indice {start_idx} al {end_idx}).")
+        print(f"[Global Eval] Totale campioni: {total_original}. Indice massimo toccato dal training: {truncated_training_length}.")
+        
+        # Prendiamo i dati partendo ESATTAMENTE dalla fine del blocco di training!
+        start_idx = truncated_training_length + (eval_samples_per_client * (client_id - 1))
+        end_idx = start_idx + eval_samples_per_client
+
+        # Controlliamo di non sforare la fine del dataset originale
+        if end_idx > total_original:
+            print(f"[WARNING] Il 10% dei dati supera il limite del dataset! Verranno usati i {total_original - start_idx} campioni finali rimanenti.")
+            end_idx = total_original
+
+        eval_texts = texts[start_idx:end_idx]
+        eval_labels = labels[start_idx:end_idx]
+
+        print(f"[Global Eval] Selezionati {len(eval_texts)} campioni 'unseen' per la valutazione (dall'indice {start_idx} al {end_idx}).")
         # ---------------------------------------------------------
 
-        print(f"[Global Eval] Tokenizzazione di {len(texts)} campioni in corso...")
+        print(f"[Global Eval] Tokenizzazione in corso...")
         tokenizer = DistilBertTokenizer.from_pretrained('distilbert-base-uncased')
-        encoded = tokenizer(texts, padding=True, truncation=True, max_length=128, return_tensors='pt')
+        encoded = tokenizer(eval_texts, padding=True, truncation=True, max_length=128, return_tensors='pt')
 
         X = encoded['input_ids']
         Mask = encoded['attention_mask']
-        Y = torch.tensor(labels, dtype=torch.int64)
+        Y = torch.tensor(eval_labels, dtype=torch.int64)
 
         return X, Mask, Y
 

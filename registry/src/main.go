@@ -103,48 +103,48 @@ func (s *registryServer) RegisterNode(ctx context.Context, req *pb.NodeInfo) (*p
 }
 
 func (s *registryServer) RegisterRespawnedNode(ctx context.Context, req *pb.NodeInfo) (*pb.RegisterResponse, error) {
-    s.mu.Lock()
+	s.mu.Lock()
 	delete(s.respawningNodes, req.NodeId) // Sblocca il deduping per il futuro
-    s.nodes[req.NodeId] = req
-    if s.pendingNodes > 0 {
-        s.pendingNodes--
-    }
-    s.cond.Broadcast()
+	s.nodes[req.NodeId] = req
+	if s.pendingNodes > 0 {
+		s.pendingNodes--
+	}
+	s.cond.Broadcast()
 
-    // Fai uno snapshot dei peer esistenti (escludendo il nuovo arrivato)
-    existingPeers := make([]*pb.NodeInfo, 0, len(s.nodes)-1)
-    for id, n := range s.nodes {
-        if id != req.NodeId {
-            existingPeers = append(existingPeers, n)
-        }
-    }
-    s.mu.Unlock()
+	// Fai uno snapshot dei peer esistenti (escludendo il nuovo arrivato)
+	existingPeers := make([]*pb.NodeInfo, 0, len(s.nodes)-1)
+	for id, n := range s.nodes {
+		if id != req.NodeId {
+			existingPeers = append(existingPeers, n)
+		}
+	}
+	s.mu.Unlock()
 
-    // Salva su DynamoDB
-    if err := utils.AddNode(req); err != nil {
-        log.Printf("[ERROR] Error adding node %s to DynamoDB: %v", req.NodeId, err)
-    }
+	// Salva su DynamoDB
+	if err := utils.AddNode(req); err != nil {
+		log.Printf("[ERROR] Error adding node %s to DynamoDB: %v", req.NodeId, err)
+	}
 
-    log.Printf("[REGISTER] Node joined: %s at %s:%d", req.NodeId, req.IpAddress, req.Port)
+	log.Printf("[REGISTER] Node joined: %s at %s:%d", req.NodeId, req.IpAddress, req.Port)
 
-    // Notifica in parallelo tutti gli altri nodi che c'è un NUOVO peer disponibile
-    var wg sync.WaitGroup
-    for _, peer := range existingPeers {
-        wg.Add(1)
-        go func(p *pb.NodeInfo) {
-            defer wg.Done()
-            signalNewNode(p, req) // Invia al peer 'p' le info sul nuovo nodo 'req'
-        }(peer)
-    }
-    // Non blocchiamo la risposta gRPC se i ping sono lenti
-    go func() {
-        wg.Wait()
-    }()
+	// Notifica in parallelo tutti gli altri nodi che c'è un NUOVO peer disponibile
+	var wg sync.WaitGroup
+	for _, peer := range existingPeers {
+		wg.Add(1)
+		go func(p *pb.NodeInfo) {
+			defer wg.Done()
+			signalNewNode(p, req) // Invia al peer 'p' le info sul nuovo nodo 'req'
+		}(peer)
+	}
+	// Non blocchiamo la risposta gRPC se i ping sono lenti
+	go func() {
+		wg.Wait()
+	}()
 
-    return &pb.RegisterResponse{
-        Success: true,
-        Message: fmt.Sprintf("Node %s successfully registered.", req.NodeId),
-    }, nil
+	return &pb.RegisterResponse{
+		Success: true,
+		Message: fmt.Sprintf("Node %s successfully registered.", req.NodeId),
+	}, nil
 }
 
 // Discover handles requests from nodes asking for the list of idle peers.
@@ -167,7 +167,7 @@ func (s *registryServer) DiscoverNodes(ctx context.Context, req *pb.DiscoverRequ
 		wgMem.Add(1)
 		go func(n *pb.NodeInfo) {
 			defer wgMem.Done()
-			
+
 			isAlive := false
 			for attempt := 1; attempt <= 3; attempt++ {
 				if pingNode(n) {
@@ -301,7 +301,7 @@ func (s *registryServer) DiscoverNodes(ctx context.Context, req *pb.DiscoverRequ
 // ChangeNodeStatus aggiorna lo stato del nodo ("idle" o "working") in memoria e su DynamoDB.
 func (s *registryServer) ChangeNodeStatus(ctx context.Context, req *pb.ChangeStatusRequest) (*pb.Ack, error) {
 	s.mu.Lock()
-	
+
 	// 1. Verifichiamo se il nodo esiste nella mappa in memoria
 	node, exists := s.nodes[req.NodeId]
 	if !exists {
@@ -316,7 +316,7 @@ func (s *registryServer) ChangeNodeStatus(ctx context.Context, req *pb.ChangeSta
 	// 2. Aggiorniamo lo stato nella mappa in memoria
 	oldStatus := node.Status
 	node.Status = req.NewStatus
-	
+
 	// Risvegliamo eventuali goroutine in attesa (es. in DiscoverNodes o WaitNodes)
 	s.cond.Broadcast()
 	s.mu.Unlock()
@@ -409,6 +409,7 @@ func (s *registryServer) SignalUnresponsiveNode(ctx context.Context, req *pb.Ful
 		int(req.CurrentRound),
 		int(req.MaxDiscoveryRetries),
 		int(req.WeightWaitTimeoutSeconds),
+		req.TrainingSetPercentage,
 	)
 
 	// Signal all nodes that a node has been removed. It will be done when the new node is raised and registered, so it can be signaled to all nodes.
@@ -438,10 +439,11 @@ func (s *registryServer) raiseRequiredNodes(required int) {
 			{Key: "START_ROUND", Value: "0"},
 			{Key: "NUM_PEERS_REQUIRED", Value: strconv.Itoa(peersRequired)},
 			{Key: "MAX_DISCOVERY_RETRIES", Value: "5"},
-			{Key: "WEIGHT_WAIT_TIMEOUT_SECONDS", Value: "1200"},
+			{Key: "WEIGHT_WAIT_TIMEOUT_SECONDS", Value: "180"},
 			{Key: "REGISTRY_ADRESS", Value: local},
 			{Key: "RESPAWNED", Value: "false"},
 			{Key: "STARTER", Value: "false"},
+			{Key: "TRAINING_SET_PERCENTAGE", Value: "0.7"},
 		}
 
 		err := utils.LaunchTask("federated_cluster", "client_task", 1, "client_container", env)
@@ -456,9 +458,8 @@ func (s *registryServer) raiseRequiredNodes(required int) {
 	fmt.Printf("Raised required nodes to %d\n", required)
 }
 
-func (s *registryServer) raiseSpecificNode(id string, requiredNodes int, port int, totalRounds int, startRound int, maxDiscoveryRetries int, weightWaitTimeoutSeconds int) {
+func (s *registryServer) raiseSpecificNode(id string, requiredNodes int, port int, totalRounds int, startRound int, maxDiscoveryRetries int, weightWaitTimeoutSeconds int, trainingSetPercentage float32) {
 	local := utils.GetFullLocalAdress()
-
 
 	env := []utils.EnvVar{
 		{Key: "CLIENT_ID", Value: id},
@@ -472,6 +473,7 @@ func (s *registryServer) raiseSpecificNode(id string, requiredNodes int, port in
 		{Key: "REGISTRY_ADRESS", Value: local},
 		{Key: "RESPAWNED", Value: "true"},
 		{Key: "STARTER", Value: "false"},
+		{Key: "TRAINING_SET_PERCENTAGE", Value: strconv.FormatFloat(float64(trainingSetPercentage), 'f', -1, 32)},
 	}
 
 	err := utils.LaunchTask("federated_cluster", "client_task", 1, "client_container", env)
@@ -565,7 +567,7 @@ func main() {
 
 	// 3. Instantiate our custom server struct with an initialized map
 	myServer := &registryServer{
-		nodes: make(map[string]*pb.NodeInfo),
+		nodes:           make(map[string]*pb.NodeInfo),
 		respawningNodes: make(map[string]bool),
 		currentClientID: 1,
 	}
