@@ -194,7 +194,7 @@ func ChangeStatus(nodeId string, new_status string) error {
 	// Execute the request
 	_, err = ddb_client.UpdateItem(context.TODO(), input)
 	if err != nil {
-		return fmt.Errorf("failed to update node status: %w", err)
+		return fmt.Errorf("Failed to update node status: %w", err)
 	}
 	return nil
 }
@@ -258,31 +258,6 @@ func LaunchTask(cluster string, task string, ammount int32, container string, pa
 	return err
 }
 
-// NOT TESTED YET
-func DestroyTask(task string) error {
-	// Using the SDK's default configuration, load additional config
-	// and credentials values from the environment variables, shared
-	// credentials, and shared configuration files
-	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithRegion("us-east-1"))
-	if err != nil {
-		return err
-	}
-
-	// Using the Config value, create the ECS client
-	ecs_client := ecs.NewFromConfig(cfg)
-
-	// Define the StopTask input
-	input := &ecs.StopTaskInput{
-		Cluster: aws.String("clients"),
-		Task:    aws.String(task),
-		Reason:  aws.String("Manually stopped via Go SDK"),
-	}
-
-	// Execute the request
-	_, err = ecs_client.StopTask(context.TODO(), input)
-	return err
-}
-
 func GetLocalIP() (string, error) {
 	addrs, err := net.InterfaceAddrs()
 	if err != nil {
@@ -319,5 +294,3 @@ func GetFullLocalAdress() string {
 
 	return net.JoinHostPort(ip, port)
 }
-
-

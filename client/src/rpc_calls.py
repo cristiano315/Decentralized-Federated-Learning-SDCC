@@ -22,7 +22,6 @@ class FederatedNodeServicer(federated_pb2_grpc.FederatedNodeServicer):
         self.seen_messages = set()
         self.lock = threading.Lock()
         self.peers = []
-        self.fanout = 2  # Number of peers to forward the message to for every gossip hop
         self.latest_local_weights = None # set up after every local_train in main.py
         self.num_samples = 0 # set up after defining servicer in main.py
         self.round_num = 0 # set up every after every local_train in main.py
@@ -42,7 +41,7 @@ class FederatedNodeServicer(federated_pb2_grpc.FederatedNodeServicer):
                     'ip': p.ip_address,    # NON p.ip
                     'port': p.port
                 } 
-                for p in request.peers
+                for p in request.peers if p.node_id != self.my_id  # Escludiamo il nodo stesso dalla lista dei peer
         ]
         
         self.pending_training_config = {
@@ -81,49 +80,39 @@ class FederatedNodeServicer(federated_pb2_grpc.FederatedNodeServicer):
         Triggered when another node calls this RPC.
         """
         msg_id = (request.sender_id, request.round_number)
+        rnd = request.round_number
+        MAX_STALENESS = 2
         
         with self.lock:
             if msg_id in self.seen_messages:
                 # Ignore msg to avoid loops
                 return federated_pb2.Ack(success=True, message="Message already seen")
+
+            if rnd < (self.round_num - MAX_STALENESS):
+                print(f"[Gossip DROPPED] Message from {request.sender_id} for round {rnd} is too old (Current round: {self.current_round}).")
+                return federated_pb2.Ack(success=False, message="Message dropped: too old")
             
             self.seen_messages.add(msg_id)
 
-            rnd = request.round_number
-            if rnd not in self.received_weights:
-                self.received_weights[rnd] = []
-            self.received_weights[rnd].append(request)
-            print(f"[Gossip] Received weights from {request.sender_id} with size {len(request.model_weights)} bytes for round {rnd}. Total received for this round: {len(self.received_weights[rnd])}")
-            
-        # Forward the gossip to a subset of peers in a separate thread to avoid blocking
-        threading.Thread(target=self._forward_gossip, args=(request,)).start()
+            if rnd < self.round_num:
+                # Lo inseriamo DIRETTAMENTE nel round corrente così verrà incluso nel prossimo FedAvg!
+                target_round = self.round_num
+                status_str = f"PAST ROUND {rnd} -> REMAPPED TO CURRENT {self.round_num}"
+            else:
+                # Viene salvato sotto il suo round effettivo (rnd == current_round oppure rnd > current_round)
+                target_round = rnd
+                status_str = "CURRENT ROUND" if rnd == self.round_num else "FUTURE ROUND (Buffered)"
+
+            if target_round not in self.received_weights:
+                self.received_weights[target_round] = []
+            self.received_weights[target_round].append(request)
+            print(
+            f"[Gossip RECEIVED - {status_str}] From {request.sender_id} | "
+            f"Original Msg Round: {rnd} | Node Round: {self.round_num} | "
+            f"Total in buffer for round {target_round}: {len(self.received_weights[target_round])}"
+            )
         
         return federated_pb2.Ack(success=True, message="Weights successfully received")
-
-    def _forward_gossip(self, request):
-        # Exclude self and sender
-        available_peers = [
-            p for p in self.peers 
-            if p['id'] != request.sender_id and p['id'] != self.my_id
-        ]
-        
-        k = min(self.fanout, len(available_peers))
-        if k == 0:
-            return
-        
-        selected_peers = random.sample(available_peers, k)
-        
-        for peer in selected_peers:
-            try:
-                # Forward the same identical payload (maintains the original sender_id)
-                print(f"[Gossip] Forwarding weights to {peer['id']}...")
-                status = send_weights_to_peer(peer['ip'], peer['port'], peer['id'], request)
-                # Se il nodo non risponde, lo rimuoviamo semplicemente dalla topologia locale
-                if status == 1:
-                    print(f"[Warning] Peer {peer['id']} unreacheable during gossip forward. Removing locally.")
-                    self.remove_peer_by_id(peer['id'])
-            except Exception as e:
-                print(f"[Gossip] Error forwarding to {peer['id']}: {e}")
 
     def RequestWeights(self, request, context):
         """
