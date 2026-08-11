@@ -409,7 +409,7 @@ func (s *registryServer) SignalUnresponsiveNode(ctx context.Context, req *pb.Ful
 		int(req.CurrentRound),
 		int(req.MaxDiscoveryRetries),
 		int(req.WeightWaitTimeoutSeconds),
-		req.TrainingSetPercentage,
+		float32(req.TrainingSetPercentage),
 	)
 
 	// Signal all nodes that a node has been removed. It will be done when the new node is raised and registered, so it can be signaled to all nodes.

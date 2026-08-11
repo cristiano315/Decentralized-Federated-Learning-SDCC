@@ -1,5 +1,5 @@
+# PLACEHOLDER, TO CHANGE
 import json
-import math
 import random
 import grpc
 from concurrent import futures
@@ -74,10 +74,6 @@ def run_training_loop(config, global_model, servicer, registry_client, MY_ID, de
     servicer.peers = peers
     k = calculate_k(peers)
     servicer.fanout = k
-    servicer.received_weights.clear()  # Clear any previous weights
-    servicer.seen_messages.clear()  # Clear seen messages to avoid stale data
-    servicer.latest_local_weights = None  # Reset latest local weights
-    servicer.round_num = start_round  # Set the round number for the servicer
     
     # ==========================================
     # RESPAWN RECOVERY: Ripristino stato dai Peer
@@ -172,21 +168,15 @@ def run_training_loop(config, global_model, servicer, registry_client, MY_ID, de
             # D. Wait Weights
             start_wait_time = time.time()
             print(f"[Wait] In attesa dei pesi dai peer per il round {round_num + 1} (Timeout: {weight_wait_timeout}s)...")
-            enough_weights_received = False
             while True:
                 with servicer.lock:
                     current_round_weights = servicer.received_weights.get(round_num, [])
                     if len(current_round_weights) >= len(peers):
                         print(f"[Info] Tutti i pesi ricevuti dai peer per il round {round_num + 1}.")
                         break
-                    if len(current_round_weights) >= math.ceil(actual_k/2):
-                        enough_weights_received = True
 
                 if time.time() - start_wait_time > weight_wait_timeout:
-                    if not enough_weights_received:
-                        print(f"[Warning] Timeout! Proseguo con {len(current_round_weights)} modelli ricevuti.")
-                    else:
-                        print(f"[Info] Ricevuti abbastanza pesi per il round {round_num + 1}.")
+                    print(f"[Warning] Timeout! Proseguo con {len(current_round_weights)} modelli ricevuti.")
                     break
                 time.sleep(0.5)
                 
@@ -225,9 +215,6 @@ def run_training_loop(config, global_model, servicer, registry_client, MY_ID, de
             # HASH DOPO FEDAVG
             fc_hash_after = get_model_hash(global_model, only_trainable=True)
             print(f"[VERIFICATION] DOPO FEDAVG round {round_num + 1} Model Classifier SHA-256: {fc_hash_after}")
-
-            # Update current round in servicer
-            servicer.current_round += 1
 
         print("\nTRAINING HAS BEEN COMPLETED.")
 
@@ -322,12 +309,6 @@ def main():
                 if len(peers) < num_peers_required:
                     print("[Aborting] Impossibile avviare il training per assenza peer.")
                 else:
-                    starter_peer = federated_pb2.NodeInfo(
-                        node_id=MY_ID,
-                        ip_address=str(MY_IP),
-                        port=int(MY_PORT),
-                        status="working"
-                    )
                     config = {
                         'training_nodes': training_nodes,
                         'total_rounds': total_rounds,
@@ -336,7 +317,7 @@ def main():
                         'max_discovery_retries': max_retries,
                         'weight_wait_timeout': timeout_sec,
                         'training_set_percentage': training_set_percentage,
-                        'peers': [*peers, starter_peer]  # Include the starter node itself in the peers list
+                        'peers': peers
                     }
                     
                     print("[Starter] Invio RPC StartTraining ai peer...")
