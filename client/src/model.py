@@ -36,7 +36,17 @@ class SentimentPyTorch(nn.Module):
             param.requires_grad = False
         
         # Classification head (DistilBERT hidden size is 768)
-        self.fc = nn.Linear(self.bert.config.hidden_size, num_class)
+        self.fc = nn.Sequential(
+            nn.Linear(self.bert.config.hidden_size, 128),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+
+            nn.Linear(128, 32),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+
+            nn.Linear(32, num_class)
+        )
         
     def forward(self, input_ids, attention_mask):
         # Pass inputs to BERT
@@ -46,7 +56,7 @@ class SentimentPyTorch(nn.Module):
         return self.fc(cls_token_state)
 
     @staticmethod
-    def prepare_dataset(bucket_name, s3_key, seed=42):
+    def prepare_dataset(bucket_name, s3_key, num_training_nodes, training_set_percentage, seed=42):
         print("[Data Prep] Loading JSON data...")
         
         # Load JSON data from S3
@@ -69,8 +79,7 @@ class SentimentPyTorch(nn.Module):
         # SELEZIONE DEL DATASET CIRCOLARE BASATA SUL CLIENT ID
         # ---------------------------------------------------------
         client_id = int(os.getenv("CLIENT_ID", 1))
-        num_training_nodes = int(os.getenv("TRAINING_NODES", 5))
-        training_set_percentage = float(os.getenv("TRAINING_SET_PERCENTAGE", 0.7))
+        
         max_samples_per_client = 1000
         total_original = len(texts)
         training_length = int(total_original * training_set_percentage)
@@ -122,7 +131,7 @@ class SentimentPyTorch(nn.Module):
         """
         model.to(device)
         criterion = nn.CrossEntropyLoss()
-        optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=2e-5)
+        optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=1e-3)
 
         # Creazione dei DataLoader per processare i dati in piccoli lotti
         batch_size = 32 # Abbassa a 16, anche 8 se dovessi avere ancora problemi di memoria
@@ -135,7 +144,7 @@ class SentimentPyTorch(nn.Module):
 
         # Early Stopping Variables
         patience = 4
-        max_epochs = 5 #changed to 5 for testing, can be increased to 10 or more
+        max_epochs = 1 #changed to 5 for testing, can be increased to 10 or more
         best_val_loss = float('inf')
         epochs_without_improvement = 0
         best_model_state = None
@@ -210,8 +219,8 @@ class SentimentPyTorch(nn.Module):
         return model, num_training_samples
 
     @staticmethod
-    def prepare_eval_dataset(bucket_name, s3_key, training_nodes):
-        """Carica e tokenizza i dati per la valutazione, pescando dalla porzione NON usata per il training."""
+    def prepare_eval_dataset(bucket_name, s3_key, training_set_percentage):
+        """Carica e tokenizza i dati per la valutazione, usa la porzione NON usata per il training."""
         print("[Global Eval] Caricamento intero dataset JSON da S3...")
         s3 = boto3.client('s3')
         response = s3.get_object(Bucket=bucket_name, Key=s3_key)
@@ -224,36 +233,19 @@ class SentimentPyTorch(nn.Module):
                 labels.append(1 if label == 4 else label)
 
         # ---------------------------------------------------------
-        # SELEZIONE DEL DATASET DI VALUTAZIONE (Zero Data Leakage)
+        # SELEZIONE DELL'INTERO TEST SET (Zero Data Leakage)
         # ---------------------------------------------------------
         total_original = len(texts)
         
-        # Ricostruiamo il limite del set di training per evitare sovrapposizioni
-        training_set_percentage = float(os.getenv("TRAINING_SET_PERCENTAGE", 0.7))
-        client_id = int(os.getenv("CLIENT_ID", 1))
-        eval_set_percentage = 1 - training_set_percentage
-        eval_length = int(total_original * eval_set_percentage)
-        eval_samples_per_client = eval_length // training_nodes
-
+        # Calcoliamo l'indice in cui termina il set di training totale
         training_length = int(total_original * training_set_percentage)
-        real_samples_per_client = (training_length // training_nodes)
-        truncated_training_length = real_samples_per_client * training_nodes
 
-        print(f"[Global Eval] Totale campioni: {total_original}. Indice massimo toccato dal training: {truncated_training_length}.")
-        
-        # Prendiamo i dati partendo ESATTAMENTE dalla fine del blocco di training!
-        start_idx = truncated_training_length + (eval_samples_per_client * (client_id - 1))
-        end_idx = start_idx + eval_samples_per_client
+        # Selezioniamo TUTTI i campioni dall'indice di fine training fino alla fine del dataset
+        eval_texts = texts[training_length:]
+        eval_labels = labels[training_length:]
 
-        # Controlliamo di non sforare la fine del dataset originale
-        if end_idx > total_original:
-            print(f"[WARNING] Il 10% dei dati supera il limite del dataset! Verranno usati i {total_original - start_idx} campioni finali rimanenti.")
-            end_idx = total_original
-
-        eval_texts = texts[start_idx:end_idx]
-        eval_labels = labels[start_idx:end_idx]
-
-        print(f"[Global Eval] Selezionati {len(eval_texts)} campioni 'unseen' per la valutazione (dall'indice {start_idx} al {end_idx}).")
+        print(f"[Global Eval] Totale campioni dataset: {total_original}.")
+        print(f"[Global Eval] Selezionati TUTTI i {len(eval_texts)} campioni rimanenti per la valutazione (dall'indice {training_length} al {total_original}).")
         # ---------------------------------------------------------
 
         print(f"[Global Eval] Tokenizzazione in corso...")
