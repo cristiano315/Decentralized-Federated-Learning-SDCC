@@ -1,0 +1,20 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+# Machine Learning
+torch
+# torchvision
+transformers
+scikit-learn
+
+# Communication
+grpcio
+grpcio-tools
+protobuf
+
+# Utilities
+boto3
+pandas
+numpy
+# matplotlib
+# seaborn
+# nltk

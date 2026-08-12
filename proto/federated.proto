@@ -39,6 +39,13 @@ service FederatedNode {
     rpc NotifyUnresponsiveNode (NodeInfo) returns (Ack);
     // A client requests to start a training sending data to other clients
     rpc StartTraining (StartTrainingRequest) returns (Ack);
+
+    // CENTRALIZED VERSION
+
+    // The coordinator sends the updated model to the clients after aggregation
+    rpc SendUpdatedModel(ModelPayload) returns (Ack);
+    // The coordinator starts the training session
+    rpc StartTrainingSession(StartTrainingCentralizedRequest) returns (Ack);
 }
 
 // ===============================================================
@@ -143,4 +150,22 @@ message StartTrainingRequest {
 message ChangeStatusRequest {
     string node_id = 1;
     string new_status = 2; // New status for the node ("idle" or "working")
-}   
+}
+
+// Message containing updated model weights sent from the central server to clients
+message ModelPayload {
+    bytes model_weights = 1; // Serialized state_dict() as a byte flow
+} 
+
+// Request for starting a centralized training session
+message StartTrainingCentralizedRequest {
+    string aggregator_address = 1;
+    int32 total_rounds = 2;
+    int32 start_round = 3;
+    int32 start_index = 4;
+    int32 weight_wait_timeout_seconds = 5;
+    float training_set_percentage = 6;
+    int32 num_epochs = 7;
+    int32 num_samples = 8;
+    int32 truncated_training_length = 9;
+}

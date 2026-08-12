@@ -1,7 +1,7 @@
 # === VARIABLES ===
 PROTO_FILE = federated.proto
 CLIENT_DIR = ../client/src
-SERVER_DIR = ../server
+SERVER_DIR = ../centralized/src
 REGISTRY_DIR = ../registry/src
 REGISTRY_SERVER_DIR = ../registry_centralized/src
 
