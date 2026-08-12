@@ -63,6 +63,7 @@ def run_training_loop(config, global_model, servicer, registry_client, MY_ID, de
     peers = config['peers']
     weight_wait_timeout = config['weight_wait_timeout']
     training_set_percentage = config['training_set_percentage']
+    num_epochs = config['num_epochs']
     
     # 1. Preparazione Dataset
     bucket_name = "sdcc-dataset-771379920513-us-east-1-an"
@@ -140,7 +141,8 @@ def run_training_loop(config, global_model, servicer, registry_client, MY_ID, de
                 model=global_model, 
                 X_train=X_train, Mask_train=Mask_train, Y_train=Y_train, 
                 X_val=X_val, Mask_val=Mask_val, Y_val=Y_val, 
-                device=device
+                device=device,
+                num_epochs=num_epochs
             )
 
             # B. Serializzazione
@@ -166,7 +168,7 @@ def run_training_loop(config, global_model, servicer, registry_client, MY_ID, de
                     peers = servicer.peers
                     registry_client.signal_unresponsive_node(
                         peer['ip'], peer['port'], peer['id'], 
-                        training_nodes, total_rounds, start_round, 5, weight_wait_timeout, training_set_percentage
+                        training_nodes, total_rounds, start_round, 5, weight_wait_timeout, training_set_percentage, num_epochs
                     )
 
             # D. Wait Weights
@@ -220,7 +222,8 @@ def run_training_loop(config, global_model, servicer, registry_client, MY_ID, de
             global_model = apply_fedavg(global_model, deserialized_models)
             
             # Clear dei buffer del servicer
-            servicer.received_weights.clear()
+            with servicer.lock:
+                servicer.received_weights.pop(round_num, None)
 
             # HASH DOPO FEDAVG
             fc_hash_after = get_model_hash(global_model, only_trainable=True)
@@ -306,6 +309,7 @@ def main():
                 max_retries = int(os.getenv("MAX_DISCOVERY_RETRIES", 5))
                 timeout_sec = int(os.getenv("WEIGHT_WAIT_TIMEOUT_SECONDS", 30))
                 training_set_percentage = float(os.getenv("TRAINING_SET_PERCENTAGE", 0.7))
+                num_epochs = int(os.getenv("NUM_EPOCHS", 1))
 
                 peers = []
                 retries = 0
@@ -336,6 +340,7 @@ def main():
                         'max_discovery_retries': max_retries,
                         'weight_wait_timeout': timeout_sec,
                         'training_set_percentage': training_set_percentage,
+                        'num_epochs': num_epochs,
                         'peers': [*peers, starter_peer]  # Include the starter node itself in the peers list
                     }
                     

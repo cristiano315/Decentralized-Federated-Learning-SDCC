@@ -410,6 +410,7 @@ func (s *registryServer) SignalUnresponsiveNode(ctx context.Context, req *pb.Ful
 		int(req.MaxDiscoveryRetries),
 		int(req.WeightWaitTimeoutSeconds),
 		float32(req.TrainingSetPercentage),
+		int(req.NumEpochs),
 	)
 
 	// Signal all nodes that a node has been removed. It will be done when the new node is raised and registered, so it can be signaled to all nodes.
@@ -444,6 +445,7 @@ func (s *registryServer) raiseRequiredNodes(required int) {
 			{Key: "RESPAWNED", Value: "false"},
 			{Key: "STARTER", Value: "false"},
 			{Key: "TRAINING_SET_PERCENTAGE", Value: "0.7"},
+			{Key: "NUM_EPOCHS", Value: "1"},
 		}
 
 		err := utils.LaunchTask("federated_cluster", "client_task", 1, "client_container", env)
@@ -458,7 +460,7 @@ func (s *registryServer) raiseRequiredNodes(required int) {
 	fmt.Printf("Raised required nodes to %d\n", required)
 }
 
-func (s *registryServer) raiseSpecificNode(id string, requiredNodes int, port int, totalRounds int, startRound int, maxDiscoveryRetries int, weightWaitTimeoutSeconds int, trainingSetPercentage float32) {
+func (s *registryServer) raiseSpecificNode(id string, requiredNodes int, port int, totalRounds int, startRound int, maxDiscoveryRetries int, weightWaitTimeoutSeconds int, trainingSetPercentage float32, numEpochs int) {
 	local := utils.GetFullLocalAdress()
 
 	env := []utils.EnvVar{
@@ -474,6 +476,7 @@ func (s *registryServer) raiseSpecificNode(id string, requiredNodes int, port in
 		{Key: "RESPAWNED", Value: "true"},
 		{Key: "STARTER", Value: "false"},
 		{Key: "TRAINING_SET_PERCENTAGE", Value: strconv.FormatFloat(float64(trainingSetPercentage), 'f', -1, 32)},
+		{Key: "NUM_EPOCHS", Value: strconv.Itoa(numEpochs)},
 	}
 
 	err := utils.LaunchTask("federated_cluster", "client_task", 1, "client_container", env)

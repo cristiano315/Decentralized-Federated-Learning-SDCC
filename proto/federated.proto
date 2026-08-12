@@ -76,6 +76,7 @@ message FullNodeInfo {
     int32 max_discovery_retries = 7; // Maximum number of retries for node discovery
     int32 weight_wait_timeout_seconds = 8; // Timeout in seconds for waiting for weights from peers
     float training_set_percentage = 9; // Percentage data for training, as a number from 0 to 1
+    int32 num_epochs = 10; //number of epochs in a round
 }
 
 // Response for registration
@@ -135,6 +136,7 @@ message StartTrainingRequest {
     int32 weight_wait_timeout_seconds = 7;
     float training_set_percentage = 8;
     repeated NodeInfo peers = 9;
+    int32 num_epochs = 10;
 }
 
 // Message for changing node status

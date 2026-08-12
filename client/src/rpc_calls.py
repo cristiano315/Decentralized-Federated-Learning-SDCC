@@ -52,6 +52,7 @@ class FederatedNodeServicer(federated_pb2_grpc.FederatedNodeServicer):
             'max_discovery_retries': request.max_discovery_retries,
             'weight_wait_timeout': request.weight_wait_timeout_seconds,
             'training_set_percentage': request.training_set_percentage,
+            'num_epochs': request.num_epochs,
             'peers': peers_list
         }
         
@@ -205,6 +206,7 @@ class FederatedNodeServicer(federated_pb2_grpc.FederatedNodeServicer):
                 max_discovery_retries=config['max_discovery_retries'],
                 weight_wait_timeout_seconds=config['weight_wait_timeout'],
                 training_set_percentage=config['training_set_percentage'],
+                num_epochs=config['num_epochs'],
                 peers=peer_proto_list
             )
             
@@ -355,7 +357,7 @@ class RegistryClient:
             print(f"[RPC Error] Failed to unregister: {e.details()}")
             return False
 
-    def signal_unresponsive_node(self, peer_ip: str, peer_port: int, peer_id: str, requiredNodes: int, totalRounds: int, startRound: int, maxDiscoveryRetries: int, weightWaitTimeoutSeconds: int, trainingSetPercentage: float):
+    def signal_unresponsive_node(self, peer_ip: str, peer_port: int, peer_id: str, requiredNodes: int, totalRounds: int, startRound: int, maxDiscoveryRetries: int, weightWaitTimeoutSeconds: int, trainingSetPercentage: float, numEpochs: int):
         """
         Signals to the registry that a peer node is unresponsive.
         """
@@ -374,7 +376,8 @@ class RegistryClient:
                     current_round=startRound,
                     max_discovery_retries=maxDiscoveryRetries,
                     weight_wait_timeout_seconds=weightWaitTimeoutSeconds,
-                    training_set_percentage=trainingSetPercentage
+                    training_set_percentage=trainingSetPercentage,
+                    num_epochs=numEpochs
                 )
                 response = stub.SignalUnresponsiveNode(payload)
                 print(f"[RPC] Signal unresponsive node success: {response.message}")

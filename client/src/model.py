@@ -79,7 +79,7 @@ class SentimentPyTorch(nn.Module):
         # SELEZIONE DEL DATASET CIRCOLARE BASATA SUL CLIENT ID
         # ---------------------------------------------------------
         client_id = int(os.getenv("CLIENT_ID", 1))
-        
+
         max_samples_per_client = 1000
         total_original = len(texts)
         training_length = int(total_original * training_set_percentage)
@@ -124,7 +124,7 @@ class SentimentPyTorch(nn.Module):
         return X_train, Mask_train, Y_train, X_val, Mask_val, Y_val
 
     @staticmethod
-    def train_local(model, X_train, Mask_train, Y_train, X_val, Mask_val, Y_val, device):
+    def train_local(model, X_train, Mask_train, Y_train, X_val, Mask_val, Y_val, device, num_epochs):
         """
         Training loop con elaborazione in mini-batch per evitare errori Out Of Memory.
         Returns the trained model and the number of samples trained on.
@@ -144,7 +144,6 @@ class SentimentPyTorch(nn.Module):
 
         # Early Stopping Variables
         patience = 4
-        max_epochs = 1 #changed to 5 for testing, can be increased to 10 or more
         best_val_loss = float('inf')
         epochs_without_improvement = 0
         best_model_state = None
@@ -154,7 +153,7 @@ class SentimentPyTorch(nn.Module):
         print(f"[Train] Starting local training on {num_training_samples} samples with batch size {batch_size}, Totale batch per epoca: {len(train_loader)}...")
         
         # Fase di Training
-        for epoch in range(max_epochs):
+        for epoch in range(num_epochs):
             model.train()
             total_train_loss = 0.0
             
