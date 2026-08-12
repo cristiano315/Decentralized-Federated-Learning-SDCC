@@ -24,7 +24,7 @@ COPY proto/ ./proto/
 COPY registry_centralized/src/ ./registry_centralized/src/
 
 WORKDIR /app/proto
-RUN make go
+RUN make go-server
 
 # Build the executable
 WORKDIR /app/registry_centralized/src

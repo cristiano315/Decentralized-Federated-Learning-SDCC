@@ -1,4 +1,4 @@
-module federate-registry
+module federate-registry-centralized
 
 go 1.25.5
 

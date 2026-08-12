@@ -229,9 +229,6 @@ def run_training_loop(config, global_model, servicer, registry_client, MY_ID, de
             fc_hash_after = get_model_hash(global_model, only_trainable=True)
             print(f"[VERIFICATION] DOPO FEDAVG round {round_num + 1} Model Classifier SHA-256: {fc_hash_after}")
 
-            # Update current round in servicer
-            servicer.current_round += 1
-
         print("\nTRAINING HAS BEEN COMPLETED.")
 
         # ==========================================
@@ -273,6 +270,8 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     torch.manual_seed(42)
     global_model = SentimentPyTorch(num_class=2).to(device)
+
+    print(f"[Init] Nodo ID: {MY_ID}, IP: {MY_IP}, PORT: {MY_PORT}, STARTER: {STARTER}, RESPAWNED: {RESPAWNED}")
 
     # ==========================================
     # REGISTRAZIONE DIVERSIFICATA (RESPAWNED vs NORMAL)
@@ -326,12 +325,7 @@ def main():
                 if len(peers) < num_peers_required:
                     print("[Aborting] Impossibile avviare il training per assenza peer.")
                 else:
-                    starter_peer = federated_pb2.NodeInfo(
-                        node_id=MY_ID,
-                        ip_address=str(MY_IP),
-                        port=int(MY_PORT),
-                        status="working"
-                    )
+                    starter_peer = {"id": MY_ID, "ip": MY_IP, "port": MY_PORT}
                     config = {
                         'training_nodes': training_nodes,
                         'total_rounds': total_rounds,
