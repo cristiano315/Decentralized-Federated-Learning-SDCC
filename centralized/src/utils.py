@@ -3,6 +3,8 @@ import hashlib
 import io
 import math
 import torch
+import boto3
+import json
 
 #Weight serialization
 def get_weights_as_bytes(model):
@@ -55,3 +57,40 @@ def get_model_hash(model: torch.nn.Module, only_trainable: bool = True) -> str:
 
     torch.save(state_dict, buffer)
     return hashlib.sha256(buffer.getvalue()).hexdigest()
+
+def get_training_index_list(peers_list, bucket_name, s3_key, training_set_percentage, max_samples_per_client=1000):
+    num_peers = len(peers_list)
+    if num_peers == 0:
+        return {}
+
+    # Load JSON data from S3
+    s3 = boto3.client('s3')
+    bucket = bucket_name
+    key = s3_key
+    response = s3.get_object(Bucket=bucket, Key=key)
+
+    # Read the JSON content from the S3 response
+    raw_data = json.loads(response['Body'].read().decode('utf-8'))
+
+    # given length
+    total_original = sum(
+        len(raw_data['user_data'][user]['x']) 
+        for user in raw_data['users']
+    )
+    
+    # save values
+    training_length = int(total_original * training_set_percentage)
+    idx_peers = training_length // num_peers
+    samples_per_client = min(idx_peers, max_samples_per_client)
+
+    indexes = {}
+    for i, peer in enumerate(peers_list):
+        peer_id = peer['id'] if isinstance(peer, dict) else peer
+
+        start = idx_peers * i
+        end = start + samples_per_client
+
+        indexes[peer_id] = {'start_idx': int(start), 'end_idx': int(end), 'num_samples': int(samples_per_client), 'truncated_training_length': int(training_length)}
+    
+    return indexes
+
