@@ -180,7 +180,7 @@ def run_training_loop(config, global_model, servicer, MY_ID, device, RESPAWNED):
         # Evaluation
         print("Valutazione globale su modello finale")
         try:
-            X_full, Mask_full, Y_full = SentimentPyTorch.prepare_eval_dataset(bucket_name, s3_key, training_nodes)
+            X_full, Mask_full, Y_full = SentimentPyTorch.prepare_eval_dataset(bucket_name, s3_key, training_set_percentage)
             SentimentPyTorch.evaluate_global(global_model, X_full, Mask_full, Y_full, device)
         except Exception as e:
             print(f"[Error] Valutazione globale fallita: {e}")
