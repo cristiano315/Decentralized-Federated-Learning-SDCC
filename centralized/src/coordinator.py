@@ -188,6 +188,14 @@ class FederatedCoordinator:
             print(f"[Coordinator] Invio del nuovo modello aggregato ai nodi...")
             self.broadcast_global_model(active_nodes, global_bytes, round_num)
 
+        # Evaluation
+        print("Valutazione globale su modello finale")
+        try:
+            X_full, Mask_full, Y_full = SentimentPyTorch.prepare_eval_dataset(bucket_name, s3_key, self.config['training_set_percentage'])
+            SentimentPyTorch.evaluate_global(global_model, X_full, Mask_full, Y_full, device)
+        except Exception as e:
+            print(f"[Error] Valutazione globale fallita: {e}")
+
         print("\n" + "="*40)
         print("  ADDESTRAMENTO FEDERATO COMPLETATO CON SUCCESSO ")
         print("="*40)
