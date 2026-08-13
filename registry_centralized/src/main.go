@@ -446,7 +446,7 @@ func (s *registryServer) raiseRequiredNodes(required int) {
 			{Key: "TRAINING_SET_PERCENTAGE", Value: "0.7"},
 		}
 
-		err := utils.LaunchTask("federated_cluster", "client_task", 1, "client_container", env)
+		err := utils.LaunchTask("centralized-cluster", "client_task_centralized", 1, "Main", env)
 		if err != nil {
 			fmt.Printf("AWS Error: %s\n", err.Error())
 		}
@@ -476,7 +476,7 @@ func (s *registryServer) raiseSpecificNode(id string, requiredNodes int, port in
 		{Key: "TRAINING_SET_PERCENTAGE", Value: strconv.FormatFloat(float64(trainingSetPercentage), 'f', -1, 32)},
 	}
 
-	err := utils.LaunchTask("federated_cluster", "client_task", 1, "client_container", env)
+	err := utils.LaunchTask("centralized-cluster", "client_task_centralized", 1, "Main", env)
 	if err != nil {
 		log.Printf("[ERROR] AWS Error launching respawned node %s: %v\n", id, err)
 		// Se il lancio fallisce, ripristiniamo il conteggio dei nodi pending
@@ -576,11 +576,8 @@ func main() {
 	// 4. Register our server with the gRPC framework
 	pb.RegisterRegistryServiceServer(grpcServer, myServer)
 
-	// Raise the N nodes to start the training uncomment if needed
-	//myServer.raiseRequiredNodes(1)
-
 	// 5. Start serving incoming requests
-	log.Printf("[INFO] Go Service Registry is running and listening on port %s...\n", port)
+	log.Printf("[INFO] Go Service Registry is running and listening on port %s with address %s...\n", port, utils.GetFullLocalAdress())
 	if err := grpcServer.Serve(lis); err != nil {
 		log.Fatalf("[FATAL] Failed to serve gRPC server: %v", err)
 	}

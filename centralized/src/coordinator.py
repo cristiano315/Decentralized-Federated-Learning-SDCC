@@ -33,7 +33,7 @@ class FederatedCoordinator:
                 'total_rounds': self.config['total_rounds'],
                 'start_round': self.config['start_round'],
                 'start_index': current_index['start_idx'],
-                'weight_wait_timeout_seconds': self.config['weight_wait_timeout_seconds'],
+                'weight_wait_timeout_seconds': self.config['timeout_sec'],
                 'training_set_percentage': self.config['training_set_percentage'],
                 'num_epochs': self.config['num_epochs'],
                 'num_samples' : current_index['num_samples'],
@@ -214,27 +214,26 @@ def start_coordinator_server(port: int):
 
 def main():
     PORT = int(os.getenv("PORT", 50053))
-    REGISTRY_ADDR = os.getenv("REGISTRY_ADRESS", "registry-nlb-ba1dc354920c500b.elb.us-east-1.amazonaws.com:8080")
+    REGISTRY_ADDR = os.getenv("REGISTRY_ADDRESS", "registry-nlb-ba1dc354920c500b.elb.us-east-1.amazonaws.com:8080")
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     torch.manual_seed(42)
 
     my_ip = get_ecs_container_ip()
     coordinator_grpc_address = f"{my_ip}:{PORT}"
-    max_retries = int(os.getenv("MAX_DISCOVERY_RETRIES", 5))
     training_nodes = int(os.getenv("TRAINING_NODES", 5))
 
     # Configurazione da distribuire a tutti i nodi
     training_config = {
         'training_nodes': training_nodes,
-        'total_rounds': int(os.getenv("TOTAL_ROUNDS", 5)),
+        'total_rounds': int(os.getenv("TOTAL_ROUNDS", 8)),
         'start_round': int(os.getenv("START_ROUND", 0)),
-        'start_index': int(os.getenv("START_INDEX", 0)),
         'num_peers_required': int(os.getenv("NUM_PEERS_REQUIRED", training_nodes - 1)),
-        'timeout_sec': int(os.getenv("WEIGHT_WAIT_TIMEOUT_SECONDS", 60)),
+        'timeout_sec': int(os.getenv("WEIGHT_WAIT_TIMEOUT_SECONDS", 120)),
         'training_set_percentage': float(os.getenv("TRAINING_SET_PERCENTAGE", 0.7)),
         'aggregator_address': coordinator_grpc_address,
-        'num_epochs': int(os.getenv("NUM_EPOCHS", 1))
+        'num_epochs': int(os.getenv("NUM_EPOCHS", 2)),
+        'max_discovery_retries': int(os.getenv("MAX_DISCOVERY_RETRIES", 5))
     }
 
     # 1. Avvio gRPC Server del Coordinatore
