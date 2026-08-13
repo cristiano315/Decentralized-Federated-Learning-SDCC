@@ -53,7 +53,7 @@ class FederatedNodeServicer(federated_pb2_grpc.FederatedNodeServicer):
         """
         
         with self.lock:
-            self.received_model = request
+            self.received_model = request.model_weights
             print(f"[RPC] Ricevuto modello aggiornato dal coordinatore con dimensione {len(request.model_weights)} bytes per il round {self.round_num}")
         
         return federated_pb2.Ack(success=True, message="Model successfully received")
@@ -96,9 +96,9 @@ def send_weights_to_coordinator(coordinator_address, payload: federated_pb2.Weig
     print(f"[RPC] Sending weights with size: {len(payload.model_weights)} bytes to coordinator...")
     try:
         with grpc.insecure_channel(coordinator_address) as channel:
-            stub = federated_pb2_grpc.FederatedNodeStub(channel)
+            stub = federated_pb2_grpc.FederatedServerStub(channel)
             # Send the RPC call
-            stub.SendWeights(payload)
+            stub.SendLocalModel(payload)
             print(f"[RPC] Sent {len(payload.model_weights)} bytes to coordinator")
             return 0  # Success
     except grpc.RpcError as e:
@@ -106,9 +106,6 @@ def send_weights_to_coordinator(coordinator_address, payload: federated_pb2.Weig
         print(f"Failed to send weights to {coordinator_address}: {e.code()}")
         # avvisa che e morto, cosi che il registry lo rimuove e ne crea un altro
         return 1 # Failure
-
-
-
 
 
 # =====================================================================
@@ -185,20 +182,19 @@ class FederatedServerServicer(federated_pb2_grpc.FederatedServerServicer):
                 for p in config['peers']
             ]
             
-            req = federated_pb2.StartTrainingRequest(
-                starter_id=self.my_id,
-                training_nodes=config['training_nodes'],
+            req = federated_pb2.StartTrainingCentralizedRequest(
+                aggregator_address=config['aggregator_address'],
                 total_rounds=config['total_rounds'],
                 start_round=config['start_round'],
-                num_peers_required=config['num_peers_required'],
-                max_discovery_retries=config['max_discovery_retries'],
-                weight_wait_timeout_seconds=config['weight_wait_timeout'],
+                start_index=config['start_index'],
+                weight_wait_timeout_seconds=config['weight_wait_timeout_seconds'],
                 training_set_percentage=config['training_set_percentage'],
-                num_epochs=config['num_epochs'],
-                peers=peer_proto_list
+                num_epochs = config['num_epochs'],
+                num_samples = config['num_samples'],
+                truncated_training_length = config['truncated_training_length']
             )
             
-            response = stub.StartTraining(req, timeout=10)
+            response = stub.StartTrainingSession(req, timeout=10)
             return response.success
         except Exception as e:
             print(f"[Error] Impossibile inviare segnale StartTraining a {peer['id']}: {e}")
@@ -218,6 +214,42 @@ class FederatedServerServicer(federated_pb2_grpc.FederatedServerServicer):
             self.peers = [p for p in self.peers if p['id'] != peer_info['id']]
             self.peers.append(peer_info)
             print(f"[Servicer] Nuovo peer {peer_info['id']} ({peer_info['ip']}:{peer_info['port']}) aggiunto.")
+
+    def SendLocalModel(self, request, context):
+        """
+        Triggered when a node sends its local model to the aggregator.
+        """
+        with self.lock:
+            rnd = request.round_number
+            if rnd not in self.received_weights:
+                self.received_weights[rnd] = []
+            self.received_weights[rnd].append(request)
+            print(f"[RPC] Ricevuto modello locale da {request.sender_id} con dimensione {len(request.model_weights)} bytes per il round {rnd}. Totale ricevuti per questo round: {len(self.received_weights[rnd])}")
+        
+        return federated_pb2.Ack(success=True, message="Local model successfully received")
+
+    def GetGlobalModel(self, request, context):
+        """
+        Triggered when a node requests the global model from the aggregator.
+        """
+        with self.lock:
+            rnd = request.round_number
+            if self.latest_local_weights is None or self.round_num < rnd:
+                print(f"[RPC] Nessun modello globale disponibile per il round {rnd}. Round corrente: {self.round_num}")
+                return federated_pb2.WeightPayload(
+                    sender_id=self.my_id,
+                    round_number=rnd,
+                    model_weights=b'',
+                    num_samples=0
+                )
+            
+            print(f"[RPC] Inviato modello globale per il round {rnd} a {request.requester_id} con dimensione {len(self.latest_local_weights)} bytes.")
+            return federated_pb2.WeightPayload(
+                sender_id=self.my_id,
+                round_number=rnd,
+                model_weights=self.latest_local_weights,
+                num_samples=self.num_samples
+            )
 
 # =====================================================================
 # REGISTRY CALLS

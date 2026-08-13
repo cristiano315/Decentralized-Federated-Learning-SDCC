@@ -7,6 +7,7 @@ import os
 import torch
 import boto3
 import json
+import urllib
 
 #Weight serialization
 def get_weights_as_bytes(model):
@@ -95,4 +96,24 @@ def get_training_index_list(peers_list, bucket_name, s3_key, training_set_percen
         indexes[peer_id] = {'start_idx': int(start), 'end_idx': int(end), 'num_samples': int(samples_per_client), 'truncated_training_length': int(training_length)}
     
     return indexes
+
+def get_ecs_container_ip():
+    metadata_url = os.getenv("ECS_CONTAINER_METADATA_URI_V4")
+    
+    if not metadata_url:
+        return "Variable ECS_CONTAINER_METADATA_URI_V4 not found. Not running on ECS?"
+
+    try:
+        with urllib.request.urlopen(metadata_url) as response:
+            body = response.read().decode('utf-8')
+            metadata = json.loads(body)
+            
+            networks = metadata.get('Networks', [])
+            if networks and 'IPv4Addresses' in networks[0]:
+                return networks[0]['IPv4Addresses'][0]
+                
+    except Exception as e:
+        return f"Error reading metadata: {e}"
+
+    return "IP address not found in metadata"
 

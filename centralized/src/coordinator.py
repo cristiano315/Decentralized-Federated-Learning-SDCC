@@ -5,53 +5,15 @@ import random
 import threading
 import torch
 import grpc
-import requests
 from concurrent import futures
 
-from utils import load_weights_from_bytes, get_weights_as_bytes, get_model_hash, get_ecs_container_ip
+from utils import load_weights_from_bytes, get_weights_as_bytes, get_model_hash, get_ecs_container_ip, get_training_index_list
+from rpc_calls import FederatedServerServicer, RegistryClient
 from model import SentimentPyTorch
+from aggregator import apply_fedavg
 
 import federated_pb2 as federated_pb2
 import federated_pb2_grpc as federated_pb2_grpc
-
-
-class CoordinatorServicer(federated_pb2_grpc.FederatedNodeServicer):
-    """
-    Interfaccia gRPC del Coordinatore per la ricezione dei pesi dai Worker.
-    """
-    def __init__(self):
-        self.lock = threading.Lock()
-        self.received_weights = {}  # {sender_id: (model_bytes, num_samples)}
-        self.current_round = -1
-        self.latest_global_bytes = None
-
-    def SendWeights(self, request, context):
-        """Riceve i pesi inviati dai nodi worker a fine round locale."""
-        with self.lock:
-            if request.round_number == self.current_round:
-                self.received_weights[request.sender_id] = (
-                    request.model_weights,
-                    request.num_samples
-                )
-                print(f"[Coordinator] Ricevuti pesi dal nodo '{request.sender_id}' per il Round {request.round_number + 1}.")
-                return federated_pb2.WeightAck(status="SUCCESS", message="Pesi registrati con successo.")
-            else:
-                print(f"[Coordinator Warning] Scartati pesi da '{request.sender_id}' per Round {request.round_number + 1} (Round corrente: {self.current_round + 1}).")
-                return federated_pb2.WeightAck(status="REJECTED", message="Round non sincronizzato.")
-
-    def GetGlobalModel(self, request, context):
-        """Permette ai nodi RESPAWNED di richiedere l'ultimo modello globale."""
-        with self.lock:
-            if self.latest_global_bytes:
-                return federated_pb2.ModelResponse(
-                    model_weights=self.latest_global_bytes,
-                    round_number=self.current_round
-                )
-            else:
-                context.set_code(grpc.StatusCode.NOT_FOUND)
-                context.set_details("Nessun modello globale ancora disponibile.")
-                return federated_pb2.ModelResponse()
-
 
 class FederatedCoordinator:
     def __init__(self, servicer, registry_addr, config, device):
@@ -59,93 +21,44 @@ class FederatedCoordinator:
         self.registry_addr = registry_addr
         self.config = config
         self.device = device
-        self.global_model = SentimentPyTorch(num_class=2).to(self.device)
+        self.registry_client = None
 
-    def fetch_active_nodes_from_registry(self):
-        """
-        Interroga il Service Registry per ottenere la lista dei nodi IDLE attivi.
-        """
-        url = f"http://{self.registry_addr}/get_nodes"
-        try:
-            response = requests.get(url, timeout=5)
-            if response.status_code == 200:
-                nodes_data = response.json()
-                # Esempio response: [{"id": "node_123", "ip": "10.0.1.5", "port": 50051, "status": "idle"}]
-                active_nodes = [
-                    f"{node['ip']}:{node['port']}" 
-                    for node in nodes_data 
-                    if node.get('status') == 'idle'
-                ]
-                print(f"[Registry] Trovati {len(active_nodes)} nodi in stato IDLE.")
-                return active_nodes
-            else:
-                print(f"[Registry Error] Risposta non valida dal Registry: {response.status_code}")
-                return []
-        except Exception as e:
-            print(f"[Registry Error] Impossibile contattare il Registry ({self.registry_addr}): {e}")
-            return []
-
-    def start_training_on_node(self, node_address, training_config):
-        """
-        Invia il segnale di START e la configurazione gRPC a un nodo worker.
-        """
-        try:
-            channel = grpc.insecure_channel(node_address)
-            stub = federated_pb2_grpc.FederatedNodeStub(channel)
-            
-            # Serializza la config da inviare
-            req = federated_pb2.StartTrainingRequest(
-                config_json=json.dumps(training_config)
-            )
-            stub.StartTraining(req, timeout=10)
-            channel.close()
-            return True
-        except Exception as e:
-            print(f"[Coordinator Error] Impossibile avviare il training sul nodo {node_address}: {e}")
-            return False
-
-    def broadcast_start_signal(self, node_addresses):
+    def broadcast_start_signal(self, nodes, indexes):
         """Invia in parallelo il comando di avvio a tutti i worker."""
         threads = []
-        for addr in node_addresses:
+        for node in nodes:
+            current_index = indexes[node['id']]
+            current_config = {
+                'aggregator_address': self.config['aggregator_address'],
+                'total_rounds': self.config['total_rounds'],
+                'start_round': self.config['start_round'],
+                'start_index': current_index['start_idx'],
+                'weight_wait_timeout_seconds': self.config['weight_wait_timeout_seconds'],
+                'training_set_percentage': self.config['training_set_percentage'],
+                'num_epochs': self.config['num_epochs'],
+                'num_samples' : current_index['num_samples'],
+                'truncated_training_length' : current_index['truncated_training_length']
+            }
             t = threading.Thread(
-                target=self.start_training_on_node, 
-                args=(addr, self.config)
+                target=self.servicer.send_start_training_signal, 
+                args=(node, current_config)
             )
             threads.append(t)
             t.start()
         for t in threads:
             t.join()
 
-    def fed_avg(self, weights_list):
-        """
-        Calcola la media pesata dei parametri del modello in base ai campioni (FedAvg).
-        """
-        total_samples = sum(num_samples for _, num_samples in weights_list)
-        first_weights = weights_list[0][0]
-        avg_weights = {}
-
-        for key in first_weights.keys():
-            avg_weights[key] = torch.zeros_like(first_weights[key], dtype=torch.float32)
-
-        for weights, num_samples in weights_list:
-            weight_factor = num_samples / total_samples
-            for key in avg_weights.keys():
-                avg_weights[key] += weights[key].to(self.device) * weight_factor
-
-        return avg_weights
-
-    def send_global_model_to_node(self, node_address, model_bytes, round_num):
+    def send_global_model_to_node(self, node, model_bytes):
         """Invia il nuovo modello globale aggregato ad un singolo worker."""
+        node_address = f"{node['ip']}:{node['port']}"
         try:
             channel = grpc.insecure_channel(node_address)
             stub = federated_pb2_grpc.FederatedNodeStub(channel)
             
             request = federated_pb2.ModelPayload(
-                round_number=round_num,
-                global_weights=model_bytes
+                model_weights=model_bytes
             )
-            stub.ReceiveGlobalModel(request, timeout=10)
+            stub.SendUpdatedModel(request, timeout=10)
             channel.close()
             return True
         except Exception as e:
@@ -155,10 +68,10 @@ class FederatedCoordinator:
     def broadcast_global_model(self, node_addresses, model_bytes, round_num):
         """Invia in parallelo il modello aggregato a tutti i worker."""
         threads = []
-        for addr in node_addresses:
+        for node in node_addresses:
             t = threading.Thread(
                 target=self.send_global_model_to_node, 
-                args=(addr, model_bytes, round_num)
+                args=(node, model_bytes)
             )
             threads.append(t)
             t.start()
@@ -171,16 +84,35 @@ class FederatedCoordinator:
         print("="*40)
 
         # 1. Discovery dei Nodi dal Registry
-        active_nodes = self.fetch_active_nodes_from_registry()
-        if not active_nodes:
-            print("[Coordinator Fatal] Nessun nodo disponibile per l'addestramento. Abort...")
+        active_nodes = []
+        retries = 0
+        num_peers_required = self.config['num_peers_required']
+        max_retries = self.config['max_discovery_retries']
+        bucket_name = "sdcc-dataset-771379920513-us-east-1-an"
+        s3_key = "all_data_niid_05_keep_3_train_9.json"
+        while len(active_nodes) < num_peers_required:
+            if retries >= max_retries:
+                print("[Error] Discovery timeout.")
+                break
+            print(f"[Discovery] Fetching peers ({retries+1}/{max_retries})...")
+            active_nodes = self.registry_client.get_peer_list(node_request_count=num_peers_required)
+            if len(active_nodes) < num_peers_required:
+                time.sleep(5)
+                retries += 1
+        
+        if len(active_nodes) < num_peers_required:
+            print("[Aborting] Impossibile avviare il training per assenza peer.")
             return
 
         print(f"[Coordinator] Nodi reclutati per l'addestramento: {active_nodes}")
 
-        # 2. Avvio dell'addestramento sui nodi (Start Training Signal)
+        # 2. Avvio dell'addestramento sui nodi (Start Training Signal) e inizializzazione modello
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        torch.manual_seed(42)
+        global_model = SentimentPyTorch(num_class=2).to(device)
         print("[Coordinator] Invio segnale di avvio (StartTraining) a tutti i nodi...")
-        self.broadcast_start_signal(active_nodes)
+        indexes = get_training_index_list(active_nodes, bucket_name, s3_key, self.config['training_set_percentage'], max_samples_per_client=1000)
+        self.broadcast_start_signal(active_nodes, indexes)
 
         total_rounds = self.config['total_rounds']
         weight_timeout = self.config['weight_wait_timeout']
@@ -221,23 +153,44 @@ class FederatedCoordinator:
                 continue
 
             # Deserializzazione e Aggregazione (FedAvg)
-            deserialized_weights = []
-            for client_id, (w_bytes, n_samples) in current_updates.items():
-                loaded_w = load_weights_from_bytes(w_bytes)
-                deserialized_weights.append((loaded_w, n_samples))
+            with self.servicer.lock:
+                round_payloads = self.servicer.received_weights.get(round_num, [])
 
-            print(f"[Coordinator] Esecuzione FedAvg su {len(deserialized_weights)} contributi...")
-            aggregated_weights = self.fed_avg(deserialized_weights)
+            print(f"[Coordinator] Esecuzione FedAvg su {len(round_payloads)} contributi...")
+
+            round_payloads.sort(key=lambda x: x.sender_id)
+            deserialized_models = []
             
+            for request in round_payloads:
+                state_dict = load_weights_from_bytes(request.model_weights)
+                deserialized_models.append({
+                    'sender_id': request.sender_id,
+                    'weights': state_dict,
+                    'num_samples': request.num_samples
+                })
+            
+            # HASH PRIMA DI FEDAVG
+            fc_hash_before = get_model_hash(global_model, only_trainable=True)
+            print(f"[VERIFICATION] PRIMA DI FEDAVG round {round_num + 1} Model Classifier SHA-256: {fc_hash_before}")
+
+            # Applicazione FedAvg
+            global_model = apply_fedavg(global_model, deserialized_models)
+            
+            # Clear dei buffer del servicer
+            with self.servicer.lock:
+                self.servicer.received_weights.pop(round_num, None)
+
+            # HASH DOPO FEDAVG
+            fc_hash_after = get_model_hash(global_model, only_trainable=True)
+            print(f"[VERIFICATION] DOPO FEDAVG round {round_num + 1} Model Classifier SHA-256: {fc_hash_after}")
+
             # Caricamento nel modello locale per verifica
-            self.global_model.load_state_dict(aggregated_weights)
-            global_bytes = get_weights_as_bytes(self.global_model)
+            global_bytes = get_weights_as_bytes(global_model)
             
             with self.servicer.lock:
                 self.servicer.latest_global_bytes = global_bytes
 
-            fc_hash = get_model_hash(self.global_model, only_trainable=True)
-            print(f"[Coordinator] Round {round_num + 1} completato. Modello SHA-256 (FC): {fc_hash}")
+            print(f"[Coordinator] Round {round_num + 1} completato.")
 
             # Broadcast del nuovo modello ai worker
             print(f"[Coordinator] Invio del nuovo modello aggregato ai nodi...")
@@ -251,8 +204,8 @@ class FederatedCoordinator:
 def start_coordinator_server(port: int):
     """Inizializza il server gRPC in background per il coordinatore."""
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
-    servicer = CoordinatorServicer()
-    federated_pb2_grpc.add_FederatedNodeServicer_to_server(servicer, server)
+    servicer = FederatedServerServicer(my_id='COORDINATOR')
+    federated_pb2_grpc.add_FederatedServerServicer_to_server(servicer, server)
     server.add_insecure_port(f'[::]:{port}')
     server.start()
     print(f"[Coordinator] Server gRPC in ascolto sulla porta {port}...")
@@ -260,14 +213,12 @@ def start_coordinator_server(port: int):
 
 
 def main():
-    PORT = int(os.getenv("PORT", 50052))
+    PORT = int(os.getenv("PORT", 50053))
     REGISTRY_ADDR = os.getenv("REGISTRY_ADRESS", "registry-nlb-ba1dc354920c500b.elb.us-east-1.amazonaws.com:8080")
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     torch.manual_seed(42)
 
-    # Indirizzo gRPC del Coordinatore
-    # (Lo stesso che i nodi client leggono dal loro dict 'config')
     my_ip = get_ecs_container_ip()
     coordinator_grpc_address = f"{my_ip}:{PORT}"
     max_retries = int(os.getenv("MAX_DISCOVERY_RETRIES", 5))
@@ -296,6 +247,8 @@ def main():
         config=training_config,
         device=device
     )
+    registry_client = RegistryClient(REGISTRY_ADDR, '1')
+    coordinator.registry_client = registry_client
 
     try:
         coordinator.run_coordination_loop()
