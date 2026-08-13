@@ -86,7 +86,7 @@ class FederatedCoordinator:
         # 1. Discovery dei Nodi dal Registry
         active_nodes = []
         retries = 0
-        num_peers_required = self.config['num_peers_required']
+        num_peers_required = self.config['training_nodes']
         max_retries = self.config['max_discovery_retries']
         bucket_name = "sdcc-dataset-771379920513-us-east-1-an"
         s3_key = "all_data_niid_05_keep_3_train_9.json"
@@ -115,7 +115,7 @@ class FederatedCoordinator:
         self.broadcast_start_signal(active_nodes, indexes)
 
         total_rounds = self.config['total_rounds']
-        weight_timeout = self.config['weight_wait_timeout']
+        weight_timeout = self.config['timeout_sec']
         min_clients = self.config.get('min_clients', 1)
 
         # 3. Ciclo dei Round FL
@@ -130,7 +130,7 @@ class FederatedCoordinator:
             start_wait_time = time.time()
             while True:
                 with self.servicer.lock:
-                    received_count = len(self.servicer.received_weights)
+                    received_count = len(self.servicer.received_weights.get(round_num, []))
                 
                 # Se tutti i nodi attivi hanno risposto
                 if received_count >= len(active_nodes):
@@ -143,14 +143,6 @@ class FederatedCoordinator:
                     break
                 
                 time.sleep(1)
-
-            # Controllo del quorum minimo
-            with self.servicer.lock:
-                current_updates = dict(self.servicer.received_weights)
-
-            if len(current_updates) < min_clients:
-                print(f"[Coordinator Critical] Ricevuti meno contributi del quorum minimo ({len(current_updates)}/{min_clients}). Salto il round.")
-                continue
 
             # Deserializzazione e Aggregazione (FedAvg)
             with self.servicer.lock:

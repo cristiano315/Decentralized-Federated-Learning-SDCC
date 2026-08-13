@@ -172,16 +172,6 @@ class FederatedServerServicer(federated_pb2_grpc.FederatedServerServicer):
             channel = grpc.insecure_channel(f"{peer['ip']}:{peer['port']}")
             stub = federated_pb2_grpc.FederatedNodeStub(channel)
             
-            peer_proto_list = [
-                federated_pb2.NodeInfo(
-                    node_id=p['id'], 
-                    ip_address=p['ip'], 
-                    port=p['port'],
-                    status="idle"
-                )
-                for p in config['peers']
-            ]
-            
             req = federated_pb2.StartTrainingCentralizedRequest(
                 aggregator_address=config['aggregator_address'],
                 total_rounds=config['total_rounds'],

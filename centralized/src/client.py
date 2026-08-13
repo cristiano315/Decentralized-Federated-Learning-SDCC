@@ -39,6 +39,7 @@ def run_training_loop(config, global_model, servicer, MY_ID, device, RESPAWNED):
     coordinator_address = config['aggregator_address']
     num_samples = config['num_samples']
     truncated_training_length = config['truncated_training_length']
+    num_epochs = config['num_epochs']
     
     # 1. Preparazione Dataset
     bucket_name = "sdcc-dataset-771379920513-us-east-1-an"
@@ -97,14 +98,14 @@ def run_training_loop(config, global_model, servicer, MY_ID, device, RESPAWNED):
                 model=global_model, 
                 X_train=X_train, Mask_train=Mask_train, Y_train=Y_train, 
                 X_val=X_val, Mask_val=Mask_val, Y_val=Y_val, 
-                device=device
+                device=device,
+                num_epochs=num_epochs
             )
 
             # B. Serializzazione
             payload_bytes = get_weights_as_bytes(global_model)
             servicer.latest_local_weights = payload_bytes
             servicer.round_num = round_num
-            servicer.seen_messages.add((MY_ID, round_num))
             
             # C. Send weights to coordinator        
             payload = federated_pb2.WeightPayload(
@@ -134,7 +135,7 @@ def run_training_loop(config, global_model, servicer, MY_ID, device, RESPAWNED):
                 
             # E. Aggregazione (FedAvg) fatta dal coordinatore
             current_round_weights_loaded = load_weights_from_bytes(current_round_weights)
-            global_model.load_state_dict(current_round_weights_loaded)
+            global_model.load_state_dict(current_round_weights_loaded, strict=False)
 
             # Clear dei buffer del servicer
             servicer.received_model = None
