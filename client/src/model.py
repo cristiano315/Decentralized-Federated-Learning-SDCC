@@ -56,7 +56,7 @@ class SentimentPyTorch(nn.Module):
         return self.fc(cls_token_state)
 
     @staticmethod
-    def prepare_dataset(bucket_name, s3_key, num_training_nodes, training_set_percentage, seed=42):
+    def prepare_dataset(bucket_name, s3_key, num_training_nodes, training_set_percentage, max_samples_per_client=1000, seed=42):
         print("[Data Prep] Loading JSON data...")
         
         # Load JSON data from S3
@@ -75,51 +75,53 @@ class SentimentPyTorch(nn.Module):
                 # Ensure labels are 0 (neg) and 1 (pos)
                 labels.append(1 if label == 4 else label)
 
-        # ---------------------------------------------------------
-        # SELEZIONE DEL DATASET CIRCOLARE BASATA SUL CLIENT ID
-        # ---------------------------------------------------------
+        # selezione dataset client basata su client id
         client_id = int(os.getenv("CLIENT_ID", 1))
-
-        max_samples_per_client = 1000
         total_original = len(texts)
-        training_length = int(total_original * training_set_percentage)
-        # divisione intera tra numero originale e il numero di dati di training
-        real_samples_per_client = (training_length // num_training_nodes)
-        truncated_training_length = real_samples_per_client * num_training_nodes
-
-        samples_per_client = real_samples_per_client if real_samples_per_client <= max_samples_per_client else max_samples_per_client
+        # divisione intera tra numero originale e il numero di dati totali
+        # ogni client ha suo blocco dati da cui estrarre training set e test set 
+        total_samples_per_client = (total_original // num_training_nodes)
+        truncated_total_length = total_samples_per_client * num_training_nodes
 
         # Usiamo il modulo % per far ripartire gli indici dall'inizio se superano il totale
-        start_idx = ((client_id - 1) * real_samples_per_client) % (truncated_training_length)
-        end_idx = start_idx + samples_per_client
+        start_idx = ((client_id - 1) * total_samples_per_client) % truncated_total_length
+        end_idx = start_idx + total_samples_per_client
 
         # Taglio circolare nel caso in cui il blocco superi la fine della lista
-        if end_idx <= truncated_training_length:
-            texts = texts[start_idx:end_idx]
-            labels = labels[start_idx:end_idx]
+        if end_idx <= truncated_total_length:
+            client_texts = texts[start_idx:end_idx]
+            client_labels = labels[start_idx:end_idx]
         else:
             # Prende la parte finale e la unisce con la parte iniziale
-            remainder = end_idx - truncated_training_length
-            texts = texts[start_idx:] + texts[:remainder]
-            labels = labels[start_idx:] + labels[:remainder]
+            remainder = end_idx - truncated_total_length
+            client_texts = texts[start_idx:] + texts[:remainder]
+            client_labels = labels[start_idx:] + labels[:remainder]
 
-        print(f"[Data Prep] Client {client_id}: estratti {len(texts)} campioni (Start index: {start_idx}).")
+        print(f"[Data Prep] Client {client_id}: estratti {len(client_texts)} campioni (Start index: {start_idx}).")
         # ---------------------------------------------------------
         print("[Data Prep] Tokenizing with DistilBERT...")
         tokenizer = DistilBertTokenizer.from_pretrained('distilbert-base-uncased')
 
         # This handles cleaning, tokenizing, and padding all at once
-        encoded = tokenizer(texts, padding=True, truncation=True, max_length=128, return_tensors='pt')
+        encoded = tokenizer(client_texts, padding=True, truncation=True, max_length=128, return_tensors='pt')
 
         X = encoded['input_ids']
         Mask = encoded['attention_mask']
-        Y = torch.tensor(labels, dtype=torch.int64)
+        Y = torch.tensor(client_labels, dtype=torch.int64)
 
         print("[Data Prep] Splitting dataset...")
-        # PyTorch random split or sklearn train_test_split on the tensors
+        # porzione dedicata al test set
+        test_size = 1.0 - training_set_percentage
         X_train, X_val, Mask_train, Mask_val, Y_train, Y_val = train_test_split(
-            X, Mask, Y, test_size=0.2, random_state=seed
+            X, Mask, Y, test_size=test_size, random_state=seed
         )
+
+        # tronca se il numero di elementi in training set e'troppo grande
+
+        if len(Y_train) > max_samples_per_client:
+            X_train = X_train[:max_samples_per_client]
+            Mask_train = Mask_train[:max_samples_per_client]
+            Y_train = Y_train[:max_samples_per_client]
 
         return X_train, Mask_train, Y_train, X_val, Mask_val, Y_val
 
@@ -216,46 +218,6 @@ class SentimentPyTorch(nn.Module):
             '''
 
         return model, num_training_samples
-
-    @staticmethod
-    def prepare_eval_dataset(bucket_name, s3_key, training_set_percentage):
-        """Carica e tokenizza i dati per la valutazione, usa la porzione NON usata per il training."""
-        print("[Global Eval] Caricamento intero dataset JSON da S3...")
-        s3 = boto3.client('s3')
-        response = s3.get_object(Bucket=bucket_name, Key=s3_key)
-        raw_data = json.loads(response['Body'].read().decode('utf-8'))
-
-        texts, labels = [], []
-        for user in raw_data['users']:
-            for tweet, label in zip(raw_data['user_data'][user]['x'], raw_data['user_data'][user]['y']):
-                texts.append(tweet[4])
-                labels.append(1 if label == 4 else label)
-
-        # ---------------------------------------------------------
-        # SELEZIONE DELL'INTERO TEST SET (Zero Data Leakage)
-        # ---------------------------------------------------------
-        total_original = len(texts)
-        
-        # Calcoliamo l'indice in cui termina il set di training totale
-        training_length = int(total_original * training_set_percentage)
-
-        # Selezioniamo TUTTI i campioni dall'indice di fine training fino alla fine del dataset
-        eval_texts = texts[training_length:]
-        eval_labels = labels[training_length:]
-
-        print(f"[Global Eval] Totale campioni dataset: {total_original}.")
-        print(f"[Global Eval] Selezionati TUTTI i {len(eval_texts)} campioni rimanenti per la valutazione (dall'indice {training_length} al {total_original}).")
-        # ---------------------------------------------------------
-
-        print(f"[Global Eval] Tokenizzazione in corso...")
-        tokenizer = DistilBertTokenizer.from_pretrained('distilbert-base-uncased')
-        encoded = tokenizer(eval_texts, padding=True, truncation=True, max_length=128, return_tensors='pt')
-
-        X = encoded['input_ids']
-        Mask = encoded['attention_mask']
-        Y = torch.tensor(eval_labels, dtype=torch.int64)
-
-        return X, Mask, Y
 
     @staticmethod
     def evaluate_global(model, X_test, Mask_test, Y_test, device):

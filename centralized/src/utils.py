@@ -82,18 +82,20 @@ def get_training_index_list(peers_list, bucket_name, s3_key, training_set_percen
     )
     
     # save values
-    training_length = int(total_original * training_set_percentage)
-    idx_peers = training_length // num_peers
-    samples_per_client = min(idx_peers, max_samples_per_client)
+    total_samples_per_client = total_original // num_peers
+    truncated_total_length = total_samples_per_client * num_peers
 
     indexes = {}
     for i, peer in enumerate(peers_list):
         peer_id = peer['id'] if isinstance(peer, dict) else peer
 
-        start = idx_peers * i
-        end = start + samples_per_client
+        start = total_samples_per_client * i
 
-        indexes[peer_id] = {'start_idx': int(start), 'end_idx': int(end), 'num_samples': int(samples_per_client), 'truncated_training_length': int(training_length)}
+        indexes[peer_id] = {
+            'start_idx': int(start), 
+            'num_samples': int(total_samples_per_client), 
+            'truncated_training_length': int(truncated_total_length)
+        }
     
     return indexes
 
