@@ -22,6 +22,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import TensorDataset, DataLoader
+import torchmetrics.classification as tm_cls
 # from embeddings import PretrainedEmbeddings
 
 
@@ -221,39 +222,90 @@ class SentimentPyTorch(nn.Module):
 
     @staticmethod
     def evaluate_global(model, X_test, Mask_test, Y_test, device):
-        """Calcola Loss e Accuracy su tutto il dataset fornito."""
+        """Calcola Loss, Accuracy, Precision, Recall, Kappa, AUC e Confusion Matrix per classificazione binaria."""
         model.eval()
         criterion = nn.CrossEntropyLoss()
-        
-        # Usiamo un batch_size come in train_local per evitare Out Of Memory
-        batch_size = 32 
+
+        batch_size = 32
         test_dataset = TensorDataset(X_test, Mask_test, Y_test)
-        test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
-        
+        test_loader = DataLoader(
+            test_dataset, batch_size=batch_size, shuffle=False
+        )
+
+        # Inizializzazione fissa per task binario
+        acc_metric = tm_cls.BinaryAccuracy().to(device)
+        precision_metric = tm_cls.BinaryPrecision().to(device)
+        recall_metric = tm_cls.BinaryRecall().to(device)
+        kappa_metric = tm_cls.BinaryCohenKappa().to(device)
+        auc_metric = tm_cls.BinaryAUROC().to(device)
+        conf_mat_metric = tm_cls.BinaryConfusionMatrix().to(device)
+
         total_loss = 0.0
-        correct_preds = 0
-        
-        print(f"[Global Eval] Avvio inferenza su {len(Y_test)} campioni. Batch totali: {len(test_loader)}")
-        
+
+        print(
+            f"[Global Eval] Avvio inferenza su {len(Y_test)} campioni (Binario). Batch totali: {len(test_loader)}"
+        )
+
         with torch.no_grad():
-            for batch_idx, (batch_x, batch_mask, batch_y) in enumerate(test_loader):
-                batch_x, batch_mask, batch_y = batch_x.to(device), batch_mask.to(device), batch_y.to(device)
-                
+            for batch_idx, (batch_x, batch_mask, batch_y) in enumerate(
+                test_loader
+            ):
+                batch_x, batch_mask, batch_y = (
+                    batch_x.to(device),
+                    batch_mask.to(device),
+                    batch_y.to(device),
+                )
+
                 output = model(batch_x, batch_mask)
                 loss = criterion(output, batch_y)
                 total_loss += loss.item() * batch_x.size(0)
-                                
-                preds = output.argmax(1)
-                correct_preds += (preds == batch_y).float().sum().item()
-                
-                if (batch_idx + 1) % 50 == 0 or (batch_idx + 1) == len(test_loader):
-                    print(f"[Global Eval] Batch {batch_idx+1:04d}/{len(test_loader):04d} completato.")
-        
-        avg_loss = total_loss / len(Y_test)
-        accuracy = correct_preds / len(Y_test)
-        
-        print("\n" + "="*30)
-        print(f"[RISULTATI GLOBALI] Loss Finale: {avg_loss:.4f} | Accuracy: {accuracy:.4f}")
-        print("="*30 + "\n")
-        
-        return avg_loss, accuracy
+
+                # Probabilità della classe positiva (indice 1) e classe predetta
+                probs = F.softmax(output, dim=-1)[:, 1]
+                preds = output.argmax(dim=1)
+
+                # Aggiornamento incrementale
+                acc_metric.update(preds, batch_y)
+                precision_metric.update(preds, batch_y)
+                recall_metric.update(preds, batch_y)
+                kappa_metric.update(preds, batch_y)
+                auc_metric.update(probs, batch_y)
+                conf_mat_metric.update(preds, batch_y)
+
+                if (batch_idx + 1) % 50 == 0 or (batch_idx + 1) == len(
+                    test_loader
+                ):
+                    print(
+                        f"[Global Eval] Batch {batch_idx+1:04d}/{len(test_loader):04d} completato."
+                    )
+
+        metrics = {
+            "loss": total_loss / len(Y_test),
+            "accuracy": acc_metric.compute().item(),
+            "precision": precision_metric.compute().item(),
+            "recall": recall_metric.compute().item(),
+            "kappa": kappa_metric.compute().item(),
+            "auc": auc_metric.compute().item(),
+            "confusion_matrix": conf_mat_metric.compute().cpu(),
+        }
+
+        print("\n" + "=" * 45)
+        print(f"[RISULTATI GLOBALI]")
+        print(f"Loss: {metrics['loss']:.4f} | Acc: {metrics['accuracy']:.4f}")
+        print(
+            f"Precision: {metrics['precision']:.4f} | Recall: {metrics['recall']:.4f}"
+        )
+        print(f"Cohen's Kappa: {metrics['kappa']:.4f} | ROC-AUC: {metrics['auc']:.4f}")
+        print("-" * 45)
+        cm = metrics["confusion_matrix"].numpy()
+        tn, fp, fn, tp = cm.ravel()
+
+        print("-" * 45)
+        print("Confusion Matrix:")
+        print(f"               Pred Neg (0)    Pred Pos (1)")
+        print(f"Actual Neg (0)     {tn:<12d}    {fp:<12d}  (TN, FP)")
+        print(f"Actual Pos (1)     {fn:<12d}    {tp:<12d}  (FN, TP)")
+        print("=" * 45 + "\n")
+        print("=" * 45 + "\n")
+
+        return metrics

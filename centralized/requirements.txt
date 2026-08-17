@@ -2,6 +2,7 @@
 
 # Machine Learning
 torch
+torchmetrics
 # torchvision
 transformers
 scikit-learn
