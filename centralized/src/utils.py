@@ -76,12 +76,13 @@ def get_training_index_list(peers_list, bucket_name, s3_key, training_set_percen
     raw_data = json.loads(response['Body'].read().decode('utf-8'))
 
     # given length
-    total_original = sum(
-        len(raw_data['user_data'][user]['x']) 
-        for user in raw_data['users']
-    )
+    texts = []
+    for user in raw_data['users']:
+        for tweet in raw_data['user_data'][user]['x']:
+            texts.append(tweet[4])
     
     # save values
+    total_original = len(texts)
     total_samples_per_client = total_original // num_peers
     truncated_total_length = total_samples_per_client * num_peers
 
