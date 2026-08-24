@@ -122,6 +122,11 @@ class SentimentPyTorch(nn.Module):
             X_train = X_train[:max_samples_per_client]
             Mask_train = Mask_train[:max_samples_per_client]
             Y_train = Y_train[:max_samples_per_client]
+        
+        if len(Y_val) > max_samples_per_client:
+            X_val = X_val[:max_samples_per_client]
+            Mask_val = Mask_val[:max_samples_per_client]
+            Y_val = Y_val[:max_samples_per_client]
 
         return X_train, Mask_train, Y_train, X_val, Mask_val, Y_val
 
