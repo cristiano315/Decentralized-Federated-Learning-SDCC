@@ -4,6 +4,7 @@ from concurrent import futures
 import time
 import torch
 import os
+import datetime
 
 # Import generated gRPC code
 from rpc_calls import RegistryClient, send_weights_to_coordinator
@@ -87,6 +88,7 @@ def run_training_loop(config, global_model, servicer, MY_ID, device, RESPAWNED):
         print(f"[Recovery] Modello ripristinato con successo. Il training ripartirà dal round {start_round + 1}.")
 
     print(f"\n[Training] Avvio sessione di addestramento.")
+    start_training_time = time.time()
 
     # 2. Ciclo dei Round
     try:
@@ -140,7 +142,9 @@ def run_training_loop(config, global_model, servicer, MY_ID, device, RESPAWNED):
             # Clear dei buffer del servicer
             servicer.received_model = None
 
+        total_training_time = time.time() - start_training_time
         print("\nTRAINING HAS BEEN COMPLETED.")
+        print(f"Total training time: {str(datetime.timedelta(seconds = total_training_time))}\n")
 
         # ==========================================
         # VERIFICA DEGLI HASH FINALI

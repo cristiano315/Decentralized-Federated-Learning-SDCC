@@ -1,6 +1,7 @@
 import json
 import math
 import random
+import datetime
 import grpc
 from concurrent import futures
 import time
@@ -137,6 +138,7 @@ def run_training_loop(config, global_model, servicer, registry_client, MY_ID, de
         print(f"[Recovery] Modello ripristinato con successo. Il training ripartirà dal round {start_round + 1}.")
 
     print(f"\n[Training] Avvio sessione di addestramento. Peers: {len(peers)}, Fanout (k): {k}")
+    start_training_time = time.time()
 
     # 2. Ciclo dei Round
     try:
@@ -237,6 +239,8 @@ def run_training_loop(config, global_model, servicer, registry_client, MY_ID, de
             print(f"[VERIFICATION] DOPO FEDAVG round {round_num + 1} Model Classifier SHA-256: {fc_hash_after}")
 
         print("\nTRAINING HAS BEEN COMPLETED.")
+        total_training_time = time.time() - start_training_time
+        print(f"Total training time: {str(datetime.timedelta(seconds = total_training_time))}\n")
 
         # ==========================================
         # VERIFICA DEGLI HASH FINALI
@@ -341,12 +345,23 @@ def main():
                         'weight_wait_timeout': timeout_sec,
                         'training_set_percentage': training_set_percentage,
                         'num_epochs': num_epochs,
+                        'peers': peers
+                    }
+                    peers_config = {
+                        'training_nodes': training_nodes,
+                        'total_rounds': total_rounds,
+                        'start_round': start_round,
+                        'num_peers_required': num_peers_required,
+                        'max_discovery_retries': max_retries,
+                        'weight_wait_timeout': timeout_sec,
+                        'training_set_percentage': training_set_percentage,
+                        'num_epochs': num_epochs,
                         'peers': [*peers, starter_peer]  # Include the starter node itself in the peers list
                     }
                     
                     print("[Starter] Invio RPC StartTraining ai peer...")
                     for peer in peers:
-                        servicer.send_start_training_signal(peer, config)
+                        servicer.send_start_training_signal(peer, peers_config)
 
                 is_starter_execution = False
 
