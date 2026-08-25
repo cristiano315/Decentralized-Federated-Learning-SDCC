@@ -3,14 +3,7 @@ import json
 import boto3
 import pandas as pd
 import numpy as np
-#import sklearn
-#from sklearn.feature_extraction.text import CountVectorizer
-# import matplotlib.pyplot as plt
-# import seaborn as sns
 from collections import Counter
-# reduce words
-#from nltk.corpus import stopwords
-#from sklearn.tree import DecisionTreeClassifier
 import copy
 from sklearn.model_selection import train_test_split
 import subprocess
@@ -23,7 +16,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import TensorDataset, DataLoader
 import torchmetrics.classification as tm_cls
-# from embeddings import PretrainedEmbeddings
 
 
 class SentimentPyTorch(nn.Module):
@@ -91,7 +83,6 @@ class SentimentPyTorch(nn.Module):
             client_labels = labels[start_idx:] + labels[:remainder]
 
         print(f"[Data Prep] Client {client_id}: estratti {len(client_texts)} campioni totali (Start index: {start_idx}).")
-        # ---------------------------------------------------------
         print("[Data Prep] Tokenizing with DistilBERT...")
         tokenizer = DistilBertTokenizer.from_pretrained('distilbert-base-uncased')
 
@@ -104,7 +95,7 @@ class SentimentPyTorch(nn.Module):
 
         print("[Data Prep] Splitting dataset...")
         test_size = 1.0 - training_set_percentage
-        # PyTorch random split or sklearn train_test_split on the tensors
+        # sklearn train_test_split on the tensors to get training set and test set for the model
         X_train, X_val, Mask_train, Mask_val, Y_train, Y_val = train_test_split(
             X, Mask, Y, test_size=test_size, random_state=seed
         )
@@ -132,7 +123,7 @@ class SentimentPyTorch(nn.Module):
         optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=1e-3)
 
         # Creazione dei DataLoader per processare i dati in piccoli lotti
-        batch_size = 32 # Abbassa a 16, anche 8 se dovessi avere ancora problemi di memoria
+        batch_size = 32
         
         train_dataset = TensorDataset(X_train, Mask_train, Y_train)
         train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
@@ -196,22 +187,6 @@ class SentimentPyTorch(nn.Module):
             val_acc = correct_preds / len(Y_val)
             
             print(f"Epoch {epoch+1:02d} | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f} | Val Acc: {val_acc:.4f}")
-
-            '''
-            # Early Stopping Logic
-            if avg_val_loss < best_val_loss:
-                best_val_loss = avg_val_loss
-                epochs_without_improvement = 0
-                best_model_state = copy.deepcopy(model.state_dict())
-            else:
-                epochs_without_improvement += 1
-                print(f"--> No improvement. Patience: {epochs_without_improvement}/{patience}")
-
-            if epochs_without_improvement >= patience:
-                print(f"Early stopping triggered at epoch {epoch+1}.")
-                model.load_state_dict(best_model_state)
-                break
-            '''
 
         return model, num_training_samples
 

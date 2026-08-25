@@ -141,11 +141,17 @@ def run_training_loop(config, global_model, servicer, registry_client, MY_ID, de
     start_training_time = time.time()
 
     # 2. Ciclo dei Round
+    # Variabili statistiche sui tempi di training e sui tempi di scambio messaggi
+    total_compute_time_acc = 0.0
+    total_comm_time_acc = 0.0
+    rounds_executed = 0
+
     try:
         for round_num in range(start_round, total_rounds):
             print(f"\n{'='*10} ROUND {round_num + 1}/{total_rounds} {'='*10}")
             
             # A. Local Training
+            start_compute = time.time()
             global_model, my_samples = SentimentPyTorch.train_local(
                 model=global_model, 
                 X_train=X_train, Mask_train=Mask_train, Y_train=Y_train, 
@@ -153,8 +159,10 @@ def run_training_loop(config, global_model, servicer, registry_client, MY_ID, de
                 device=device,
                 num_epochs=num_epochs
             )
+            compute_time = time.time() - start_compute
 
             # B. Serializzazione
+            start_comm = time.time()
             payload_bytes = get_weights_as_bytes(global_model)
             servicer.latest_local_weights = payload_bytes
             servicer.round_num = round_num
@@ -238,9 +246,24 @@ def run_training_loop(config, global_model, servicer, registry_client, MY_ID, de
             fc_hash_after = get_model_hash(global_model, only_trainable=True)
             print(f"[VERIFICATION] DOPO FEDAVG round {round_num + 1} Model Classifier SHA-256: {fc_hash_after}")
 
+            comm_time = time.time() - start_comm
+            print(f"Round {round_num}: Tempo Calcolo = {compute_time:.2f}s, Tempo Rete/Attesa = {comm_time:.2f}s")
+
+            # tempi da stampare alla fine
+            total_compute_time_acc += compute_time
+            total_comm_time_acc += comm_time
+            rounds_executed += 1
+
         print("\nTRAINING HAS BEEN COMPLETED.")
         total_training_time = time.time() - start_training_time
         print(f"Total training time: {str(datetime.timedelta(seconds = total_training_time))}\n")
+
+        # Stampa delle medie
+        if rounds_executed > 0:
+            avg_compute = total_compute_time_acc / rounds_executed
+            avg_comm = total_comm_time_acc / rounds_executed
+            print(f"MEDIA Tempo di Calcolo per round: {avg_compute:.2f}s")
+            print(f"MEDIA Tempo di Rete/Attesa per round: {avg_comm:.2f}s")
 
         # ==========================================
         # VERIFICA DEGLI HASH FINALI
