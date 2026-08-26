@@ -229,7 +229,7 @@ func LaunchTask(cluster string, task string, ammount int32, container string, pa
 
 		NetworkConfiguration: &ecstypes.NetworkConfiguration{
 			AwsvpcConfiguration: &ecstypes.AwsVpcConfiguration{
-				Subnets: []string{"subnet-049b938577203e317", "subnet-04ec6d7a5a15cedcc", "subnet-06db11df621ee60eb", "subnet-0ac28f8e5d64980c9", "subnet-0c126c2d6158e8ccd", "subnet-08394add4030de621"},
+				Subnets: []string{"subnet-0461b7700dadc71ea", "subnet-0b69b19f072ee6070", "subnet-0932e497e7f35ba86", "subnet-04a2749a19f244591", "subnet-0f202eb907c098dd2", "subnet-0a6ffc73ca4b2b632"},
 				//SecurityGroups: []string{"sg-xxxxxxxx"},
 				AssignPublicIp: ecstypes.AssignPublicIpEnabled,
 			},

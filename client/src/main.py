@@ -67,7 +67,7 @@ def run_training_loop(config, global_model, servicer, registry_client, MY_ID, de
     num_epochs = config['num_epochs']
     
     # 1. Preparazione Dataset
-    bucket_name = "sdcc-dataset-771379920513-us-east-1-an"
+    bucket_name = "sdcc-dataset-264452429750-us-east-1-an"
     s3_key = "all_data_niid_05_keep_3_train_9.json"
     X_train, Mask_train, Y_train, X_val, Mask_val, Y_val = SentimentPyTorch.prepare_dataset(
         bucket_name=bucket_name, 
@@ -291,7 +291,7 @@ def main():
     MY_ID = str(os.getenv("CLIENT_ID", f"node_{random.randint(1000,9999)}"))
     MY_IP = get_ecs_container_ip()
     MY_PORT = int(os.getenv("PORT", 50051))
-    REGISTRY_ADDR = os.getenv("REGISTRY_ADRESS", "registry-nlb-ba1dc354920c500b.elb.us-east-1.amazonaws.com:8080")
+    REGISTRY_ADDR = os.getenv("REGISTRY_ADRESS", "registry-nlb-99c42fd51de63d80.elb.us-east-1.amazonaws.com:8080")
     STARTER = os.getenv("STARTER", "false").lower() == "true"
     RESPAWNED = os.getenv("RESPAWNED", "false").lower() == "true"
     

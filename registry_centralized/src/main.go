@@ -269,7 +269,6 @@ func (s *registryServer) DiscoverNodes(ctx context.Context, req *pb.DiscoverRequ
 		if missingNow > 0 {
 			log.Printf("[DISCOVERY] Required IDLE: %d. Found IDLE: %d. Pending: %d. Raising missing: %d",
 				requiredPeers, idleCountNow, s.pendingNodes, missingNow)
-			s.pendingNodes += missingNow
 			s.mu.Unlock() // <-- RILASCIAMO DOPO L'AGGIORNAMENTO DI PENDINGNODES
 
 			go s.raiseRequiredNodes(missingNow)

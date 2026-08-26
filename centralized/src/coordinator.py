@@ -88,7 +88,7 @@ class FederatedCoordinator:
         retries = 0
         num_peers_required = self.config['training_nodes']
         max_retries = self.config['max_discovery_retries']
-        bucket_name = "sdcc-dataset-771379920513-us-east-1-an"
+        bucket_name = "sdcc-dataset-264452429750-us-east-1-an"
         s3_key = "all_data_niid_05_keep_3_train_9.json"
         while len(active_nodes) < num_peers_required:
             if retries >= max_retries:
@@ -206,7 +206,7 @@ def start_coordinator_server(port: int):
 
 def main():
     PORT = int(os.getenv("PORT", 50053))
-    REGISTRY_ADDR = os.getenv("REGISTRY_ADDRESS", "registry-nlb-ba1dc354920c500b.elb.us-east-1.amazonaws.com:8080")
+    REGISTRY_ADDR = os.getenv("REGISTRY_ADDRESS", "centralized-registry-nlb-d298b040b4ebce81.elb.us-east-1.amazonaws.com:8080")
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     torch.manual_seed(42)
