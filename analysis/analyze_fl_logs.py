@@ -555,10 +555,10 @@ def main():
         f"• Epoche per round: {epochs_str}\n\n"
     )
     if integrity_report:
-        msg += f"⚠️ ATTENZIONE: {len(integrity_report)} file hanno dati mancanti o troncati!\n"
+        msg += f"ATTENZIONE: {len(integrity_report)} file hanno dati mancanti o troncati!\n"
         msg += f"Consulta la sezione iniziale di '{os.path.basename(txt_rep)}' per i dettagli dei file da riesportare.\n\n"
     else:
-        msg += "✅ Tutti i file sono completi al 100%.\n\n"
+        msg += "Tutti i file sono completi al 100%.\n\n"
 
     msg += f"File generati in cartella:\n• {os.path.basename(txt_rep)}\n• {os.path.basename(csv_rep)}\n• {os.path.basename(plot_path)}"
 
