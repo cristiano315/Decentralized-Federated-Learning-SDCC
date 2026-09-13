@@ -405,8 +405,7 @@ def main():
             # start training
             if config:
                 try:
-                    run_training_loop(
-                        config, global_model, servicer, registry_client, MY_ID, device, RESPAWNED)
+                    run_training_loop(config, global_model, servicer, registry_client, MY_ID, device, RESPAWNED)
                 except Exception as e:
                     print(f"Error during training execution: {e}")
                 RESPAWNED = False

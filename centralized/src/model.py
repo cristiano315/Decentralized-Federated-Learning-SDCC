@@ -95,9 +95,7 @@ class SentimentPyTorch(nn.Module):
         print("Splitting dataset...")
         test_size = 1.0 - training_set_percentage
         # test set creation
-        X_train, X_test, Mask_train, Mask_test, Y_train, Y_test = train_test_split(
-            X, Mask, Y, test_size=test_size, random_state=seed
-        )
+        X_train, X_test, Mask_train, Mask_test, Y_train, Y_test = train_test_split(X, Mask, Y, test_size=test_size, random_state=seed)
 
         # validation set creation
         val_size = 0.1 # fixed dimension
@@ -207,9 +205,7 @@ class SentimentPyTorch(nn.Module):
         batch_size = 32
         # as in training, load the dataset
         test_dataset = TensorDataset(X_test, Mask_test, Y_test)
-        test_loader = DataLoader(
-            test_dataset, batch_size=batch_size, shuffle=False
-        )
+        test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
         # inizialization for binary task
         acc_metric = tm_cls.BinaryAccuracy().to(device)
@@ -221,9 +217,7 @@ class SentimentPyTorch(nn.Module):
 
         total_loss = 0.0
 
-        print(
-            f"Starting inference on {len(Y_test)} samples (Binary) for global evaluation. Total batches: {len(test_loader)}"
-        )
+        print(f"Starting inference on {len(Y_test)} samples (Binary) for global evaluation. Total batches: {len(test_loader)}")
 
         with torch.no_grad():
             for batch_idx, (batch_x, batch_mask, batch_y) in enumerate(test_loader):
@@ -249,9 +243,7 @@ class SentimentPyTorch(nn.Module):
                 conf_mat_metric.update(preds, batch_y)
 
                 if (batch_idx + 1) % 50 == 0 or (batch_idx + 1) == len(test_loader):
-                    print(
-                        f"Batch {batch_idx+1:04d}/{len(test_loader):04d} completed."
-                    )
+                    print(f"Batch {batch_idx+1:04d}/{len(test_loader):04d} completed.")
         # extract metrics from all the variables
         metrics = {
             "loss": total_loss / len(Y_test),
@@ -267,9 +259,7 @@ class SentimentPyTorch(nn.Module):
         print("\n" + "=" * 45)
         print(f"[GLOBAL RESULTS]")
         print(f"Loss: {metrics['loss']:.4f} | Acc: {metrics['accuracy']:.4f}")
-        print(
-            f"Precision: {metrics['precision']:.4f} | Recall: {metrics['recall']:.4f}"
-        )
+        print(f"Precision: {metrics['precision']:.4f} | Recall: {metrics['recall']:.4f}")
         print(f"Cohen's Kappa: {metrics['kappa']:.4f} | ROC-AUC: {metrics['auc']:.4f}")
         print("-" * 45)
         cm = metrics["confusion_matrix"].numpy()

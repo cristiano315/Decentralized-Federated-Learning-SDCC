@@ -53,9 +53,7 @@ class FederatedCoordinator:
             channel = grpc.insecure_channel(node_address)
             stub = federated_pb2_grpc.FederatedNodeStub(channel)
             
-            request = federated_pb2.ModelPayload(
-                model_weights=model_bytes
-            )
+            request = federated_pb2.ModelPayload(model_weights=model_bytes)
             stub.SendUpdatedModel(request, timeout=10)
             channel.close()
             return True
