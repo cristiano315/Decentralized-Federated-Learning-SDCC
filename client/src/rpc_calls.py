@@ -1,6 +1,5 @@
 #File for grpc calls implementation
 
-import random
 import threading
 
 import grpc

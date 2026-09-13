@@ -1,12 +1,7 @@
 #File for the model definition, and training, to implement
 import json
 import boto3
-import pandas as pd
-import numpy as np
-from collections import Counter
-import copy
 from sklearn.model_selection import train_test_split
-import subprocess
 import os
 from transformers import DistilBertModel, DistilBertTokenizer
 

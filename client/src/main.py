@@ -9,7 +9,6 @@ import torch
 import os
 import urllib
 import copy
-import threading
 
 # import generated gRPC code
 from rpc_calls import RegistryClient, send_weights_to_peer
