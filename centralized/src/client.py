@@ -45,7 +45,7 @@ def run_training_loop(config, global_model, servicer, MY_ID, device, RESPAWNED):
     # 1. Preparazione Dataset
     bucket_name = "sdcc-dataset-264452429750-us-east-1-an"
     s3_key = "all_data_niid_05_keep_3_train_9.json"
-    X_train, Mask_train, Y_train, X_val, Mask_val, Y_val = SentimentPyTorch.prepare_dataset(bucket_name, s3_key, num_samples, training_set_percentage, start_index, truncated_training_length, max_samples_per_client=1000, seed=42)
+    X_train, Mask_train, Y_train, X_val, Mask_val, Y_val, X_test, Mask_test, Y_test = SentimentPyTorch.prepare_dataset(bucket_name, s3_key, num_samples, training_set_percentage, start_index, truncated_training_length, max_samples_per_client=1000, seed=42)
     my_samples = len(Y_train)
     
     servicer.num_samples = my_samples
@@ -180,7 +180,7 @@ def run_training_loop(config, global_model, servicer, MY_ID, device, RESPAWNED):
         # Evaluation
         print("Global evaluation on final model")
         try:
-            SentimentPyTorch.evaluate_global(global_model, X_val, Mask_val, Y_val, device)
+            SentimentPyTorch.evaluate_global(global_model, X_test, Mask_test, Y_test, device)
         except Exception as e:
             print(f"Error: Global evaluation failed: {e}")
 

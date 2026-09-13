@@ -95,10 +95,22 @@ class SentimentPyTorch(nn.Module):
 
         print("Splitting dataset...")
         test_size = 1.0 - training_set_percentage
-        # sklearn train_test_split on the tensors to get training set and test set for the model
-        X_train, X_val, Mask_train, Mask_val, Y_train, Y_val = train_test_split(
+        # porzione dedicata al test set
+        X_train, X_test, Mask_train, Mask_test, Y_train, Y_test = train_test_split(
             X, Mask, Y, test_size=test_size, random_state=seed
         )
+
+        # porzione per validation set
+        val_size = 0.1 # quantita fissa
+        val_split_idx = int(len(X_train) * (1 - val_size))
+
+        X_val = X_train[val_split_idx:]
+        Mask_val = Mask_train[val_split_idx:]
+        Y_val = Y_train[val_split_idx:]
+
+        X_train = X_train[:val_split_idx]
+        Mask_train = Mask_train[:val_split_idx]
+        Y_train = Y_train[:val_split_idx]
 
         if len(Y_train) > max_samples_per_client:
             X_train = X_train[:max_samples_per_client]
@@ -110,7 +122,12 @@ class SentimentPyTorch(nn.Module):
             Mask_val = Mask_val[:max_samples_per_client]
             Y_val = Y_val[:max_samples_per_client]
 
-        return X_train, Mask_train, Y_train, X_val, Mask_val, Y_val
+        if len(Y_test) > max_samples_per_client:
+            X_test = X_test[:max_samples_per_client]
+            Mask_test = Mask_test[:max_samples_per_client]
+            Y_test = Y_test[:max_samples_per_client]
+
+        return X_train, Mask_train, Y_train, X_val, Mask_val, Y_val, X_test, Mask_test, Y_test
 
     @staticmethod
     def train_local(model, X_train, Mask_train, Y_train, X_val, Mask_val, Y_val, device, num_epochs):
@@ -122,7 +139,6 @@ class SentimentPyTorch(nn.Module):
         criterion = nn.CrossEntropyLoss()
         optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=1e-3)
 
-        # Creazione dei DataLoader per processare i dati in piccoli lotti
         batch_size = 32
         
         train_dataset = TensorDataset(X_train, Mask_train, Y_train)
@@ -131,22 +147,15 @@ class SentimentPyTorch(nn.Module):
         val_dataset = TensorDataset(X_val, Mask_val, Y_val)
         val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
-        # Early Stopping Variables
-        patience = 4
-        best_val_loss = float('inf')
-        epochs_without_improvement = 0
-        best_model_state = None
-        
         num_training_samples = len(Y_train)
 
         print(f"Starting local training on {num_training_samples} samples with batch size {batch_size}, Totale batch per epoca: {len(train_loader)}...")
         
-        # Fase di Training
+        # fase di training
         for epoch in range(num_epochs):
             model.train()
             total_train_loss = 0.0
             
-            # Iterazione sui batch di addestramento
             for batch_idx, (batch_x, batch_mask, batch_y) in enumerate(train_loader):
                 batch_x, batch_mask, batch_y = batch_x.to(device), batch_mask.to(device), batch_y.to(device)
                 
@@ -159,15 +168,12 @@ class SentimentPyTorch(nn.Module):
                 
                 total_train_loss += loss.item() * batch_x.size(0)
 
-                # -----------------------------------------------------
-                # CONTROLLO A GRANA FINE: Stampa log ogni 10 batch
-                # -----------------------------------------------------
                 if (batch_idx + 1) % 10 == 0 or (batch_idx + 1) == len(train_loader):
                     print(f"Epoch {epoch+1:02d} | Batch {batch_idx+1:04d}/{len(train_loader):04d} | Current Batch Loss: {loss.item():.4f}")
 
             avg_train_loss = total_train_loss / num_training_samples
 
-            # Fase di Validazione a lotti
+            # fase di validazione
             model.eval()
             total_val_loss = 0.0
             correct_preds = 0
