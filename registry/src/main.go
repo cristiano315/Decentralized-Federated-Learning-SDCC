@@ -75,18 +75,17 @@ func (s *registryServer) RegisterNode(ctx context.Context, req *pb.NodeInfo) (*p
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	//WAKE UP any clients sleeping in DiscoverNodes
+	//Wake up any clients sleeping in DiscoverNodes
 	defer s.cond.Broadcast()
 
 	// Store the node information in the map
-	delete(s.respawningNodes, req.NodeId) // Sblocca il deduping per il futuro
+	delete(s.respawningNodes, req.NodeId) // Unlock deduping for future registrations
 	s.nodes[req.NodeId] = req
 	s.pendingNodes -= 1
 
 	//call aws dynamodb to store node
 	err := utils.AddNode(req)
 	if err != nil {
-		// Log the error but DO NOT crash the server
 		log.Printf("Error adding node %s to DynamoDB: %v", req.NodeId, err)
 		return &pb.RegisterResponse{
 			Success: false,
@@ -104,14 +103,14 @@ func (s *registryServer) RegisterNode(ctx context.Context, req *pb.NodeInfo) (*p
 
 func (s *registryServer) RegisterRespawnedNode(ctx context.Context, req *pb.NodeInfo) (*pb.RegisterResponse, error) {
 	s.mu.Lock()
-	delete(s.respawningNodes, req.NodeId) // Sblocca il deduping per il futuro
+	delete(s.respawningNodes, req.NodeId) // Unlock deduping for future registrations
 	s.nodes[req.NodeId] = req
 	if s.pendingNodes > 0 {
 		s.pendingNodes--
 	}
 	s.cond.Broadcast()
 
-	// Fai uno snapshot dei peer esistenti (escludendo il nuovo arrivato)
+	// Snapshot existing peers
 	existingPeers := make([]*pb.NodeInfo, 0, len(s.nodes)-1)
 	for id, n := range s.nodes {
 		if id != req.NodeId {
@@ -120,23 +119,23 @@ func (s *registryServer) RegisterRespawnedNode(ctx context.Context, req *pb.Node
 	}
 	s.mu.Unlock()
 
-	// Salva su DynamoDB
+	// Save on DynamoDB
 	if err := utils.AddNode(req); err != nil {
 		log.Printf("Error adding node %s to DynamoDB: %v", req.NodeId, err)
 	}
 
 	log.Printf("Node joined: %s at %s:%d", req.NodeId, req.IpAddress, req.Port)
 
-	// Notifica in parallelo tutti gli altri nodi che c'è un NUOVO peer disponibile
+	// Notify all existing peers about the new node in parallel
 	var wg sync.WaitGroup
 	for _, peer := range existingPeers {
 		wg.Add(1)
 		go func(p *pb.NodeInfo) {
 			defer wg.Done()
-			signalNewNode(p, req) // Invia al peer 'p' le info sul nuovo nodo 'req'
+			signalNewNode(p, req)
 		}(peer)
 	}
-	// Non blocchiamo la risposta gRPC se i ping sono lenti
+	// Don't block the response, let the notifications happen in the background
 	go func() {
 		wg.Wait()
 	}()
@@ -149,7 +148,7 @@ func (s *registryServer) RegisterRespawnedNode(ctx context.Context, req *pb.Node
 
 // Discover handles requests from nodes asking for the list of idle peers.
 func (s *registryServer) DiscoverNodes(ctx context.Context, req *pb.DiscoverRequest) (*pb.DiscoverResponse, error) {
-	// 1. PING DEI SOLI NODI IN MEMORIA IN STATO IDLE (ESCLUDENDO IL RICHIEDENTE)
+	// Ping nodes in memory
 	s.mu.RLock()
 	nodesToPing := make([]*pb.NodeInfo, 0, len(s.nodes))
 	for id, node := range s.nodes {
@@ -191,7 +190,7 @@ func (s *registryServer) DiscoverNodes(ctx context.Context, req *pb.DiscoverRequ
 	}
 	wgMem.Wait()
 
-	// Pulizia nodi morti
+	// Cleanup dead nodes
 	if len(deadMemNodeIDs) > 0 {
 		s.mu.Lock()
 		for _, id := range deadMemNodeIDs {
@@ -200,8 +199,8 @@ func (s *registryServer) DiscoverNodes(ctx context.Context, req *pb.DiscoverRequ
 		s.mu.Unlock()
 	}
 
-	// 2. CONTEGGIO IDLE E PENDING (CON LOCK APPOSTA)
-	s.mu.Lock() // <-- INIZIO LOCK ESCLUSIVO PER IL CONTEGGIO
+	// Count idle and pending
+	s.mu.Lock()
 	currentIdleCount := 0
 	for id, node := range s.nodes {
 		if id != req.NodeId && node.Status == "idle" {
@@ -215,9 +214,9 @@ func (s *registryServer) DiscoverNodes(ctx context.Context, req *pb.DiscoverRequ
 
 	requiredPeers := int(req.RequestCount)
 	missing := requiredPeers - (currentIdleCount + s.pendingNodes)
-	s.mu.Unlock() // <-- FINE LOCK ESCLUSIVO
+	s.mu.Unlock()
 
-	// 3. RECUPERO DA DYNAMODB SE MANCANO NODI
+	// Fetch from DynamoDB if missing
 	if missing > 0 {
 		dynamoNodes, err := utils.FetchIdleNodes()
 		if err == nil && len(dynamoNodes) > 0 {
@@ -256,8 +255,8 @@ func (s *registryServer) DiscoverNodes(ctx context.Context, req *pb.DiscoverRequ
 			s.mu.Unlock()
 		}
 
-		// RICALCOLO DOPO DYNAMODB
-		s.mu.Lock() // <-- PRENDIAMO IL LOCK PRIMA DI RICALCOLARE
+		// Recalculate after DynamoDB
+		s.mu.Lock()
 		idleCountNow := 0
 		for id, node := range s.nodes {
 			if id != req.NodeId && node.Status == "idle" {
@@ -269,18 +268,18 @@ func (s *registryServer) DiscoverNodes(ctx context.Context, req *pb.DiscoverRequ
 		if missingNow > 0 {
 			log.Printf("Required IDLE: %d. Found IDLE: %d. Pending: %d. Raising missing: %d",
 				requiredPeers, idleCountNow, s.pendingNodes, missingNow)
-			s.mu.Unlock() // <-- RILASCIAMO DOPO L'AGGIORNAMENTO DI PENDINGNODES
+			s.mu.Unlock()
 
 			go s.raiseRequiredNodes(missingNow)
 		} else {
-			s.mu.Unlock() // <-- RILASCIAMO SE NON SERVONO ALTRI NODI
+			s.mu.Unlock()
 		}
 	}
 
-	// 4. ATTESA CHE I NODI SIANO REGISTRATI E PRONTI IN STATO IDLE
+	// Wait for nodes to register and become idle
 	s.WaitIdleNodes(requiredPeers, req.NodeId)
 
-	// 5. RESTITUZIONE PEER LIST (SOLO IDLE)
+	// Return peer list
 	var peerList []*pb.NodeInfo
 	s.mu.RLock()
 	for _, node := range s.nodes {
@@ -297,11 +296,11 @@ func (s *registryServer) DiscoverNodes(ctx context.Context, req *pb.DiscoverRequ
 	}, nil
 }
 
-// ChangeNodeStatus aggiorna lo stato del nodo ("idle" o "working") in memoria e su DynamoDB.
+// ChangeNodeStatus updates node status ("idle" or "working") in memory and on DynamoDB.
 func (s *registryServer) ChangeNodeStatus(ctx context.Context, req *pb.ChangeStatusRequest) (*pb.Ack, error) {
 	s.mu.Lock()
 
-	// 1. Verifichiamo se il nodo esiste nella mappa in memoria
+	// Check if node already available in memory
 	node, exists := s.nodes[req.NodeId]
 	if !exists {
 		s.mu.Unlock()
@@ -312,21 +311,20 @@ func (s *registryServer) ChangeNodeStatus(ctx context.Context, req *pb.ChangeSta
 		}, nil
 	}
 
-	// 2. Aggiorniamo lo stato nella mappa in memoria
+	// Update the status in memory
 	oldStatus := node.Status
 	node.Status = req.NewStatus
 
-	// Risvegliamo eventuali goroutine in attesa (es. in DiscoverNodes o WaitNodes)
+	// Wake up waiting goroutines
 	s.cond.Broadcast()
 	s.mu.Unlock()
 
 	log.Printf("Node %s changed status from '%s' to '%s'\n", req.NodeId, oldStatus, req.NewStatus)
 
-	// 3. Aggiorniamo lo stato su DynamoDB tramite la funzione in utils
+	// Update status in DynamoDB
 	err := utils.ChangeStatus(req.NodeId, req.NewStatus)
 	if err != nil {
 		log.Printf("Error: Failed to update status in DynamoDB for node %s: %v\n", req.NodeId, err)
-		// Non facciamo fallire la chiamata gRPC se DynamoDB ha un ritardo, ma notifichiamo l'errore nel log
 		return &pb.Ack{
 			Success: true,
 			Message: fmt.Sprintf("Node %s status updated in memory to '%s', but DynamoDB update failed.", req.NodeId, req.NewStatus),
@@ -346,10 +344,10 @@ func (s *registryServer) UnregisterNode(ctx context.Context, req *pb.NodeInfo) (
 	defer s.mu.Unlock()
 	defer s.cond.Broadcast() // Notify any waiting goroutines that a node has left
 
-	// Remove the node from the in-memory map
+	// Remove the node from the memory
 	delete(s.nodes, req.NodeId)
 
-	// Remove the node from dynamoDB and destroy it. NOT NECESSARY TO DESTROY IT IF NOT LEFT ON WAIT.
+	// Remove the node from dynamoDB and destroy it.
 	err := utils.RemoveNode(req.NodeId)
 	if err != nil {
 		log.Printf("Error removing node %s from DynamoDB: %v", req.NodeId, err)
@@ -369,7 +367,7 @@ func (s *registryServer) UnregisterNode(ctx context.Context, req *pb.NodeInfo) (
 func (s *registryServer) SignalUnresponsiveNode(ctx context.Context, req *pb.FullNodeInfo) (*pb.Ack, error) {
 	s.mu.Lock()
 
-	// 1. VERIFICA DEDUPING: Se il nodo è già stato rimosso o è già in fase di respawn, ignora!
+	// Deduping
 	_, existsInMap := s.nodes[req.NodeId]
 	alreadyRespawning := s.respawningNodes[req.NodeId]
 
@@ -382,7 +380,7 @@ func (s *registryServer) SignalUnresponsiveNode(ctx context.Context, req *pb.Ful
 		}, nil
 	}
 
-	// 2. Segna il nodo come "in fase di respawn" e rimuovilo dalla mappa
+	// Mark the node as respawning and remove it from the active nodes
 	s.respawningNodes[req.NodeId] = true
 	delete(s.nodes, req.NodeId)
 	s.pendingNodes++
@@ -481,7 +479,7 @@ func (s *registryServer) raiseSpecificNode(id string, requiredNodes int, port in
 	err := utils.LaunchTask("federated_cluster", "client_task", 1, "Main", env)
 	if err != nil {
 		log.Printf("AWS Error launching respawned node %s: %v\n", id, err)
-		// Se il lancio fallisce, ripristiniamo il conteggio dei nodi pending
+		// If the launch fails, decrement pendingNodes to avoid deadlock in WaitIdleNodes
 		s.mu.Lock()
 		if s.pendingNodes > 0 {
 			s.pendingNodes--
@@ -557,17 +555,17 @@ func signalNewNode(oldNode *pb.NodeInfo, newNode *pb.NodeInfo) bool {
 
 func main() {
 
-	// 1. Define the port the Go server will listen on
+	// Define the port the Go server will listen on
 	port := ":8080"
 	lis, err := net.Listen("tcp", port)
 	if err != nil {
 		log.Fatalf("Failed to listen on port %s: %v", port, err)
 	}
 
-	// 2. Create a new gRPC server instance
+	// Create a new gRPC server instance
 	grpcServer := grpc.NewServer()
 
-	// 3. Instantiate our custom server struct with an initialized map
+	// Instantiate custom server struct
 	myServer := &registryServer{
 		nodes:           make(map[string]*pb.NodeInfo),
 		respawningNodes: make(map[string]bool),
@@ -575,10 +573,10 @@ func main() {
 	}
 	myServer.cond = sync.NewCond(&myServer.mu)
 
-	// 4. Register our server with the gRPC framework
+	// Register server
 	pb.RegisterRegistryServiceServer(grpcServer, myServer)
 
-	// 5. Start serving incoming requests
+	// Start serving incoming requests
 	log.Printf("Go Service Registry is running and listening on port %s...\n", port)
 	if err := grpcServer.Serve(lis); err != nil {
 		log.Fatalf("Failed to serve gRPC server: %v", err)

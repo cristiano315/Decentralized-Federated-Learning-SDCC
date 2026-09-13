@@ -14,14 +14,13 @@ def get_weights_as_bytes(model):
     """Extract weights from the model and convert them to bytes for gRPC"""
     buffer = io.BytesIO()
     
-    # 1. Get the full dictionary of all weights
+    # Get the full dictionary of all weights
     full_state_dict = model.state_dict()
 
-    # 2. Filter out the heavy, frozen BERT layers. 
-    # We only want keys that start with 'fc.' (like 'fc.weight' and 'fc.bias')
+    # Filter out the heavy, frozen bert layers. 
     fc_state_dict = {k: v for k, v in full_state_dict.items() if k.startswith('fc.')}
     
-    # 3. Save only the tiny classification head
+    # Save only the tiny classification head
     torch.save(fc_state_dict, buffer)
     return buffer.getvalue()
 
@@ -44,16 +43,12 @@ def calculate_k(num_peers):
     
 #hash
 def get_model_hash(model: torch.nn.Module, only_trainable: bool = True) -> str:
-    """
-    Calcola l'hash SHA-256 degli state_dict del modello PyTorch.
-    - only_trainable=True: calcola l'hash solo dei parametri addestrati (es. 'fc.').
-    - only_trainable=False: calcola l'hash di TUTTI i pesi del modello.
-    """
+    """Calculate the number of peers to gossip to based on the total number of peers"""
     buffer = io.BytesIO()
     state_dict = model.state_dict()
     
     if only_trainable:
-        # Considera solo la testa di classificazione (FC)
+        # Consider only the classification head (FC)
         state_dict = {k: v.cpu() for k, v in state_dict.items() if k.startswith('fc.')}
     else:
         state_dict = {k: v.cpu() for k, v in state_dict.items()}

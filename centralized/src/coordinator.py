@@ -22,7 +22,7 @@ class FederatedCoordinator:
         self.registry_client = None
 
     def broadcast_start_signal(self, nodes, indexes):
-        """Invia in parallelo il comando di avvio a tutti i worker."""
+        """Send start signal to all nodes in parallel."""
         threads = []
         for node in nodes:
             current_index = indexes[node['id']]
@@ -47,7 +47,7 @@ class FederatedCoordinator:
             t.join()
 
     def send_global_model_to_node(self, node, model_bytes):
-        """Invia il nuovo modello globale aggregato ad un singolo worker."""
+        """Send the updated global model to a single worker."""
         node_address = f"{node['ip']}:{node['port']}"
         try:
             channel = grpc.insecure_channel(node_address)
@@ -62,7 +62,7 @@ class FederatedCoordinator:
             return False
 
     def broadcast_global_model(self, node_addresses, model_bytes, round_num):
-        """Invia in parallelo il modello aggregato a tutti i worker."""
+        """Send the updated global model to all nodes in parallel."""
         threads = []
         for node in node_addresses:
             t = threading.Thread(
@@ -79,7 +79,7 @@ class FederatedCoordinator:
         print("    STARTING FEDERATED LEARNING COORDINATOR   ")
         print("="*40)
 
-        # 1. Discovery dei Nodi dal Registry
+        # Nodes discovery from registry
         active_nodes = []
         retries = 0
         num_peers_required = self.config['training_nodes']
@@ -102,7 +102,7 @@ class FederatedCoordinator:
 
         print(f"Nodes recruited for training: {active_nodes}")
 
-        # 2. Avvio dell'addestramento sui nodi (Start Training Signal) e inizializzazione modello
+        # Send Start Training Signal to models and initialize the global model
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         torch.manual_seed(42)
         global_model = SentimentPyTorch(num_class=2).to(device)
@@ -114,7 +114,7 @@ class FederatedCoordinator:
         weight_timeout = self.config['timeout_sec']
         min_clients = self.config.get('min_clients', 1)
 
-        # 3. Ciclo dei Round FL
+        # Training loop
         for round_num in range(total_rounds):
             print(f"\n-------------------- ROUND {round_num + 1}/{total_rounds} --------------------")
             
@@ -122,13 +122,13 @@ class FederatedCoordinator:
                 self.servicer.current_round = round_num
                 self.servicer.received_weights.clear()
 
-            # Attesa dei pesi dai nodi worker
+            # Wait for weights from all nodes or until timeout
             start_wait_time = time.time()
             while True:
                 with self.servicer.lock:
                     received_count = len(self.servicer.received_weights.get(round_num, []))
                 
-                # Se tutti i nodi attivi hanno risposto
+                # IF all nodes have sent their weights, break the loop
                 if received_count >= len(active_nodes):
                     print(f"Weights received from all nodes ({received_count}/{len(active_nodes)}).")
                     break
@@ -140,7 +140,7 @@ class FederatedCoordinator:
                 
                 time.sleep(1)
 
-            # Deserializzazione e Aggregazione (FedAvg)
+            # Deserialization and FedAvg
             with self.servicer.lock:
                 round_payloads = self.servicer.received_weights.get(round_num, [])
 
@@ -157,22 +157,21 @@ class FederatedCoordinator:
                     'num_samples': request.num_samples
                 })
             
-            # HASH PRIMA DI FEDAVG
+            # HASH BEFORE FEDAVG
             fc_hash_before = get_model_hash(global_model, only_trainable=True)
             print(f"VERIFICATION: BEFORE FEDAVG round {round_num + 1} Model Classifier SHA-256: {fc_hash_before}")
 
-            # Applicazione FedAvg
             global_model = apply_fedavg(global_model, deserialized_models)
             
-            # Clear dei buffer del servicer
+            # Clear servicer buffer
             with self.servicer.lock:
                 self.servicer.received_weights.pop(round_num, None)
 
-            # HASH DOPO FEDAVG
+            # HASH AFTER FEDAVG
             fc_hash_after = get_model_hash(global_model, only_trainable=True)
             print(f"VERIFICATION: AFTER FEDAVG round {round_num + 1} Model Classifier SHA-256: {fc_hash_after}")
 
-            # Caricamento nel modello locale per verifica
+            # Load local model for verification
             global_bytes = get_weights_as_bytes(global_model)
             
             with self.servicer.lock:
@@ -180,7 +179,7 @@ class FederatedCoordinator:
 
             print(f"Round {round_num + 1} completed.")
 
-            # Broadcast del nuovo modello ai worker
+            # Broadcast new model to workers
             print(f"Sending updated global model to all nodes for Round {round_num + 1}...")
             self.broadcast_global_model(active_nodes, global_bytes, round_num)
 
@@ -190,7 +189,7 @@ class FederatedCoordinator:
 
 
 def start_coordinator_server(port: int):
-    """Inizializza il server gRPC in background per il coordinatore."""
+    """Initialize the background gRPC server for the coordinator."""
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
     servicer = FederatedServerServicer(my_id='COORDINATOR')
     federated_pb2_grpc.add_FederatedServerServicer_to_server(servicer, server)
@@ -211,7 +210,7 @@ def main():
     coordinator_grpc_address = f"{my_ip}:{PORT}"
     training_nodes = int(os.getenv("TRAINING_NODES", 5))
 
-    # Configurazione da distribuire a tutti i nodi
+    # Configuration for the federated training process to send to the nodes
     training_config = {
         'training_nodes': training_nodes,
         'total_rounds': int(os.getenv("TOTAL_ROUNDS", 8)),
@@ -224,10 +223,10 @@ def main():
         'max_discovery_retries': int(os.getenv("MAX_DISCOVERY_RETRIES", 5))
     }
 
-    # 1. Avvio gRPC Server del Coordinatore
+    # Start coordinator gRPC server
     server, servicer = start_coordinator_server(PORT)
 
-    # 2. Avvio della logica dell'Orchestratore
+    # Start coordinator logic
     coordinator = FederatedCoordinator(
         servicer=servicer,
         registry_addr=REGISTRY_ADDR,

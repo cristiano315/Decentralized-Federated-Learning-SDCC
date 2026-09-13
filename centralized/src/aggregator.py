@@ -2,12 +2,6 @@ import torch
 import copy
 
 def apply_fedavg(global_model, received_payloads):
-    """
-    applies the Federated Averaging algorithm, including the local model
-    recieved_payloads has all the models
-    global_model is the local model, we use it just for the structure
-    returns the new local model
-    """
 
     # add the peer models and the local model in a list, they are all in received payloads
     weights_list = []

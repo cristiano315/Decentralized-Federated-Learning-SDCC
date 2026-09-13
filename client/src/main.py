@@ -64,7 +64,7 @@ def run_training_loop(config, global_model, servicer, registry_client, MY_ID, de
     training_set_percentage = config['training_set_percentage']
     num_epochs = config['num_epochs']
     
-    # preparazione dataset
+    # prepare dataset
     bucket_name = "sdcc-dataset-264452429750-us-east-1-an"
     s3_key = "all_data_niid_05_keep_3_train_9.json"
     X_train, Mask_train, Y_train, X_val, Mask_val, Y_val, X_test, Mask_test, Y_test = SentimentPyTorch.prepare_dataset(

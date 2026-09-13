@@ -29,18 +29,17 @@ class FederatedNodeServicer(federated_pb2_grpc.FederatedNodeServicer):
 
     def StartTraining(self, request, context):
         """
-        RPC chiamata dallo Starter Node per inviare le ENV e la lista dei PEERS
-        a un nodo di supporto (Starter = False).
+        Called by starter node to send ENV and PEERS list to a support node.
         """
         print(f"Received StartTraining request from {request.starter_id}")
 
         peers_list = [
                 {
-                    'id': p.node_id,       # NON p.id
-                    'ip': p.ip_address,    # NON p.ip
+                    'id': p.node_id,
+                    'ip': p.ip_address,
                     'port': p.port
                 } 
-                for p in request.peers if p.node_id != self.my_id  # Escludiamo il nodo stesso dalla lista dei peer
+                for p in request.peers if p.node_id != self.my_id  # Exclude self
         ]
         
         self.pending_training_config = {
@@ -55,12 +54,12 @@ class FederatedNodeServicer(federated_pb2_grpc.FederatedNodeServicer):
             'peers': peers_list
         }
         
-        # Sblocchiamo il thread principale che attende in stato IDLE
+        # Unlock main thread to start training
         self.start_training_event.set()
         return federated_pb2.Ack(success=True, message="Training queued")
 
     def remove_peer_by_id(self, peer_id: str):
-        """Rimuove un nodo non responsivo dalla lista dei peer locali in modo thread-safe."""
+        """Remove unresponsive peer from the local list (thread-safe)."""
         with self.lock:
             initial_count = len(self.peers)
             self.peers = [p for p in self.peers if p['id'] != peer_id]
@@ -68,9 +67,8 @@ class FederatedNodeServicer(federated_pb2_grpc.FederatedNodeServicer):
                 print(f"[Servicer] Peer {peer_id} removed successfully from the local list. Remaining peers: {len(self.peers)}")
 
     def add_or_update_peer(self, peer_info: dict):
-        """Aggiunge o aggiorna un peer nella lista locale."""
+        """Add or update a peer in the local list."""
         with self.lock:
-            # Aggiorna se esiste già, altrimenti aggiungi
             self.peers = [p for p in self.peers if p['id'] != peer_info['id']]
             self.peers.append(peer_info)
             print(f"New peer {peer_info['id']} ({peer_info['ip']}:{peer_info['port']}) added.")
@@ -95,11 +93,11 @@ class FederatedNodeServicer(federated_pb2_grpc.FederatedNodeServicer):
             self.seen_messages.add(msg_id)
 
             if rnd < self.round_num:
-                # Lo inseriamo DIRETTAMENTE nel round corrente così verrà incluso nel prossimo FedAvg!
+                # Insert in current round to use immediately
                 target_round = self.round_num
                 status_str = f"PAST ROUND {rnd} -> REMAPPED TO CURRENT {self.round_num}"
             else:
-                # Viene salvato sotto il suo round effettivo (rnd == current_round oppure rnd > current_round)
+                # Save in actual round or future round buffer
                 target_round = rnd
                 status_str = "CURRENT ROUND" if rnd == self.round_num else "FUTURE ROUND (Buffered)"
 
@@ -145,12 +143,10 @@ class FederatedNodeServicer(federated_pb2_grpc.FederatedNodeServicer):
         try:
             with grpc.insecure_channel(peer_address) as channel:
                 stub = federated_pb2_grpc.FederatedNodeStub(channel)
-                # Create a WeightRequest payload to request weights
                 request_payload = federated_pb2.WeightRequest(
                     requester_id=my_id,
                     round_number=round_number_requested
                 )
-                # Send the RPC call
                 response = stub.RequestWeights(request_payload)
                 if response.model_weights == b'':
                     print(f"Peer {peer_id} has no weights for round {round_number_requested}.")
@@ -229,9 +225,7 @@ def send_weights_to_peer(peer_ip: str, peer_port: int, peer_id: str, payload: fe
             print(f"Sent {len(payload.model_weights)} bytes to peer {peer_id}")
             return 0  # Success
     except grpc.RpcError as e:
-        # To add logging for CloudWatch
         print(f"Failed to send weights to {peer_address}: {e.code()}")
-        # avvisa che e morto, cosi che il registry lo rimuove e ne crea un altro
         return 1 # Failure
 
 
@@ -323,7 +317,7 @@ class RegistryClient:
         """
         RPC method to handle notifications about unresponsive nodes from the registry.
         """
-        # Se il servicer è collegato, aggiorna la lista dei peer
+        # If the servicer is connected, update the local peer list to remove the unresponsive node
         if self.servicer is not None:
             self.servicer.add_or_update_peer({"id": request.node_id, "ip": request.ip_address, "port": request.port})
             print(f"Peer {request.node_id} marked as unresponsive. Updated local peer list.")

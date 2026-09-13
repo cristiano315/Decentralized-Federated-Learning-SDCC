@@ -26,7 +26,7 @@ class FederatedNodeServicer(federated_pb2_grpc.FederatedNodeServicer):
 
     def StartTrainingSession(self, request, context):
         """
-        RPC chiamata dal coordinator per inviare le ENV e la lista dei PEERS
+        Called by starter node to send ENV and PEERS list to a support node.
         """
         print(f"Received StartTrainingSession request from coordinator.")
         
@@ -42,7 +42,7 @@ class FederatedNodeServicer(federated_pb2_grpc.FederatedNodeServicer):
             'truncated_training_length': request.truncated_training_length,
         }
         
-        # Sblocchiamo il thread principale che attende in stato IDLE
+        # Unlock main thread to start training
         self.start_training_event.set()
         return federated_pb2.Ack(success=True, message="Training queued")
 
@@ -101,9 +101,7 @@ def send_weights_to_coordinator(coordinator_address, payload: federated_pb2.Weig
             print(f"Sent {len(payload.model_weights)} bytes to coordinator")
             return 0  # Success
     except grpc.RpcError as e:
-        # To add logging for CloudWatch
         print(f"Failed to send weights to {coordinator_address}: {e.code()}")
-        # avvisa che e morto, cosi che il registry lo rimuove e ne crea un altro
         return 1 # Failure
 
 
@@ -137,12 +135,10 @@ class FederatedServerServicer(federated_pb2_grpc.FederatedServerServicer):
         try:
             with grpc.insecure_channel(peer_address) as channel:
                 stub = federated_pb2_grpc.FederatedNodeStub(channel)
-                # Create a WeightRequest payload to request weights
                 request_payload = federated_pb2.WeightRequest(
                     requester_id=my_id,
                     round_number=round_number_requested
                 )
-                # Send the RPC call
                 response = stub.RequestWeights(request_payload)
                 if response.model_weights == b'':
                     print(f"Peer {peer_id} has no weights for round {round_number_requested}.")
@@ -189,7 +185,7 @@ class FederatedServerServicer(federated_pb2_grpc.FederatedServerServicer):
             print(f"Error: Impossibile inviare segnale StartTraining a {peer['id']}: {e}")
 
     def remove_peer_by_id(self, peer_id: str):
-        """Rimuove un nodo non responsivo dalla lista dei peer locali in modo thread-safe."""
+        """Remove unresponsive peer from the local list (thread-safe)."""
         with self.lock:
             initial_count = len(self.peers)
             self.peers = [p for p in self.peers if p['id'] != peer_id]
@@ -197,9 +193,8 @@ class FederatedServerServicer(federated_pb2_grpc.FederatedServerServicer):
                 print(f"Peer {peer_id} successfully removed from the local peer list. Remaining peers: {len(self.peers)}")
 
     def add_or_update_peer(self, peer_info: dict):
-        """Aggiunge o aggiorna un peer nella lista locale."""
+        """Add or update a peer in the local list."""
         with self.lock:
-            # Aggiorna se esiste già, altrimenti aggiungi
             self.peers = [p for p in self.peers if p['id'] != peer_info['id']]
             self.peers.append(peer_info)
             print(f"New peer {peer_info['id']} ({peer_info['ip']}:{peer_info['port']}) added.")
@@ -318,7 +313,6 @@ class RegistryClient:
                 response = stub.DiscoverNodes(request)
                 
                 # Convert gRPC repeated field to a standard Python list
-                # ATTENZIONE: Il proto definisce il campo come 'nodes', non 'peers'
                 peers = [{"id": p.node_id, "ip": p.ip_address, "port": p.port} for p in response.nodes]
                 return peers
         except grpc.RpcError as e:
@@ -329,7 +323,7 @@ class RegistryClient:
         """
         RPC method to handle notifications about unresponsive nodes from the registry.
         """
-        # Se il servicer è collegato, aggiorna la lista dei peer
+        # If the servicer is connected, update the local peer list to remove the unresponsive node
         if self.servicer is not None:
             self.servicer.add_or_update_peer({"id": request.node_id, "ip": request.ip_address, "port": request.port})
             print(f"Peer {request.node_id} marked as unresponsive. Updated local peer list.")
@@ -392,7 +386,7 @@ class RegistryClient:
 
     def update_status(self, new_status: str) -> bool:
         """
-        Invia una richiesta RPC al Go Registry per aggiornare lo stato del nodo ("idle" o "working").
+        Send RPC request to the registry to update the status of this node ("idle" or "working").
         """
         try:
             req = federated_pb2.ChangeStatusRequest(
