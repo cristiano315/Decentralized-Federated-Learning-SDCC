@@ -81,7 +81,7 @@ def run_training_loop(config, global_model, servicer, MY_ID, device, RESPAWNED):
         global_model.load_state_dict(current_weights)
         servicer.received_weights.clear()
         
-        # prepare to join next round like the working peers
+        # skip current round since we just recovered it
         start_round += 1
         print(f"[Model succesfully restored. The training will resume from round {start_round + 1}.")
 

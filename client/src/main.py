@@ -133,7 +133,7 @@ def run_training_loop(config, global_model, servicer, registry_client, MY_ID, de
         global_model = apply_fedavg(global_model, deserialized_models)
         servicer.received_weights.clear()
         
-        # Advance round (skip current round since we just recovered it)
+        # skip current round since we just recovered it
         start_round += 1
         print(f"Model succesfully restored. The training will resume from round {start_round + 1}.")
 
