@@ -87,14 +87,14 @@ func (s *registryServer) RegisterNode(ctx context.Context, req *pb.NodeInfo) (*p
 	err := utils.AddNode(req)
 	if err != nil {
 		// Log the error but DO NOT crash the server
-		log.Printf("[ERROR] Error adding node %s to DynamoDB: %v", req.NodeId, err)
+		log.Printf("Error adding node %s to DynamoDB: %v", req.NodeId, err)
 		return &pb.RegisterResponse{
 			Success: false,
 			Message: fmt.Sprintf("Failed to register node %s due to database error.", req.NodeId),
 		}, nil
 	}
 
-	log.Printf("[REGISTER] Node joined: %s at %s:%d and added to DynamoDB\n ", req.NodeId, req.IpAddress, req.Port)
+	log.Printf("Node joined: %s at %s:%d and added to DynamoDB\n ", req.NodeId, req.IpAddress, req.Port)
 
 	return &pb.RegisterResponse{
 		Success: true,
@@ -122,10 +122,10 @@ func (s *registryServer) RegisterRespawnedNode(ctx context.Context, req *pb.Node
 
 	// Salva su DynamoDB
 	if err := utils.AddNode(req); err != nil {
-		log.Printf("[ERROR] Error adding node %s to DynamoDB: %v", req.NodeId, err)
+		log.Printf("Error adding node %s to DynamoDB: %v", req.NodeId, err)
 	}
 
-	log.Printf("[REGISTER] Node joined: %s at %s:%d", req.NodeId, req.IpAddress, req.Port)
+	log.Printf("Node joined: %s at %s:%d", req.NodeId, req.IpAddress, req.Port)
 
 	// Notifica in parallelo tutti gli altri nodi che c'è un NUOVO peer disponibile
 	var wg sync.WaitGroup
@@ -178,13 +178,13 @@ func (s *registryServer) DiscoverNodes(ctx context.Context, req *pb.DiscoverRequ
 			}
 
 			if !isAlive {
-				log.Printf("[DISCOVERY] In-memory idle peer %s unreachable. Removing.", n.NodeId)
+				log.Printf("In-memory idle peer %s unreachable. Removing.", n.NodeId)
 				deadMemNodesMu.Lock()
 				deadMemNodeIDs = append(deadMemNodeIDs, n.NodeId)
 				deadMemNodesMu.Unlock()
 
 				if err := utils.RemoveNode(n.NodeId); err != nil {
-					log.Printf("[ERROR] Failed to remove dead node %s from DynamoDB: %v", n.NodeId, err)
+					log.Printf("Error: Failed to remove dead node %s from DynamoDB: %v", n.NodeId, err)
 				}
 			}
 		}(node)
@@ -242,7 +242,7 @@ func (s *registryServer) DiscoverNodes(ctx context.Context, req *pb.DiscoverRequ
 						newlyDiscovered = append(newlyDiscovered, n)
 						aliveMu.Unlock()
 					} else {
-						log.Printf("[DISCOVERY] Node %s unreachable in DynamoDB. Removing.", n.NodeId)
+						log.Printf("Node %s unreachable in DynamoDB. Removing.", n.NodeId)
 						utils.RemoveNode(n.NodeId)
 					}
 				}(node)
@@ -267,7 +267,7 @@ func (s *registryServer) DiscoverNodes(ctx context.Context, req *pb.DiscoverRequ
 		missingNow := requiredPeers - (idleCountNow + s.pendingNodes)
 
 		if missingNow > 0 {
-			log.Printf("[DISCOVERY] Required IDLE: %d. Found IDLE: %d. Pending: %d. Raising missing: %d",
+			log.Printf("Required IDLE: %d. Found IDLE: %d. Pending: %d. Raising missing: %d",
 				requiredPeers, idleCountNow, s.pendingNodes, missingNow)
 			s.mu.Unlock() // <-- RILASCIAMO DOPO L'AGGIORNAMENTO DI PENDINGNODES
 
@@ -290,7 +290,7 @@ func (s *registryServer) DiscoverNodes(ctx context.Context, req *pb.DiscoverRequ
 	}
 	s.mu.RUnlock()
 
-	log.Printf("[DISCOVERY] Node %s requested %d peers. Returning %d IDLE peers.", req.NodeId, requiredPeers, len(peerList))
+	log.Printf("Node %s requested %d peers. Returning %d IDLE peers.", req.NodeId, requiredPeers, len(peerList))
 
 	return &pb.DiscoverResponse{
 		Nodes: peerList,
@@ -305,7 +305,7 @@ func (s *registryServer) ChangeNodeStatus(ctx context.Context, req *pb.ChangeSta
 	node, exists := s.nodes[req.NodeId]
 	if !exists {
 		s.mu.Unlock()
-		log.Printf("[WARNING] tentato cambio stato per nodo inesistente: %s\n", req.NodeId)
+		log.Printf("Warning: Attempted to change status for non-existent node: %s\n", req.NodeId)
 		return &pb.Ack{
 			Success: false,
 			Message: fmt.Sprintf("Node %s not found in registry.", req.NodeId),
@@ -320,12 +320,12 @@ func (s *registryServer) ChangeNodeStatus(ctx context.Context, req *pb.ChangeSta
 	s.cond.Broadcast()
 	s.mu.Unlock()
 
-	log.Printf("[STATUS_CHANGE] Node %s changed status from '%s' to '%s'\n", req.NodeId, oldStatus, req.NewStatus)
+	log.Printf("Node %s changed status from '%s' to '%s'\n", req.NodeId, oldStatus, req.NewStatus)
 
 	// 3. Aggiorniamo lo stato su DynamoDB tramite la funzione in utils
 	err := utils.ChangeStatus(req.NodeId, req.NewStatus)
 	if err != nil {
-		log.Printf("[ERROR] Failed to update status in DynamoDB for node %s: %v\n", req.NodeId, err)
+		log.Printf("Error: Failed to update status in DynamoDB for node %s: %v\n", req.NodeId, err)
 		// Non facciamo fallire la chiamata gRPC se DynamoDB ha un ritardo, ma notifichiamo l'errore nel log
 		return &pb.Ack{
 			Success: true,
@@ -352,12 +352,12 @@ func (s *registryServer) UnregisterNode(ctx context.Context, req *pb.NodeInfo) (
 	// Remove the node from dynamoDB and destroy it. NOT NECESSARY TO DESTROY IT IF NOT LEFT ON WAIT.
 	err := utils.RemoveNode(req.NodeId)
 	if err != nil {
-		log.Printf("[ERROR] Error removing node %s from DynamoDB: %v", req.NodeId, err)
+		log.Printf("Error removing node %s from DynamoDB: %v", req.NodeId, err)
 	} else {
-		log.Printf("[INFO] Node %s removed from DynamoDB.", req.NodeId)
+		log.Printf("Node %s removed from DynamoDB.", req.NodeId)
 	}
 
-	log.Printf("[UNREGISTER] Node left: %s at %s:%d\n", req.NodeId, req.IpAddress, req.Port)
+	log.Printf("Node left: %s at %s:%d\n", req.NodeId, req.IpAddress, req.Port)
 
 	return &pb.Ack{
 		Success: true,
@@ -375,7 +375,7 @@ func (s *registryServer) SignalUnresponsiveNode(ctx context.Context, req *pb.Ful
 
 	if !existsInMap || alreadyRespawning {
 		s.mu.Unlock()
-		log.Printf("[SIGNAL_UNRESPONSIVE] Node %s already processed or being respawned. Ignoring duplicate signal.", req.NodeId)
+		log.Printf("Node %s already processed or being respawned. Ignoring duplicate signal.", req.NodeId)
 		return &pb.Ack{
 			Success: true,
 			Message: fmt.Sprintf("Signal for node %s ignored (already processing).", req.NodeId),
@@ -392,12 +392,12 @@ func (s *registryServer) SignalUnresponsiveNode(ctx context.Context, req *pb.Ful
 	// Remove the node from dynamoDB
 	err := utils.RemoveNode(req.NodeId)
 	if err != nil {
-		log.Printf("[ERROR] Error removing node %s from DynamoDB: %v", req.NodeId, err)
+		log.Printf("Error: Failed to remove node %s from DynamoDB: %v", req.NodeId, err)
 	} else {
-		log.Printf("[INFO] Node %s removed from DynamoDB.", req.NodeId)
+		log.Printf("Node %s removed from DynamoDB.", req.NodeId)
 	}
 
-	log.Printf("[SIGNAL_UNRESPONSIVE] Node is unresponsive: %s at %s:%d\n", req.NodeId, req.IpAddress, req.Port)
+	log.Printf("Node is unresponsive: %s at %s:%d\n", req.NodeId, req.IpAddress, req.Port)
 
 	// Create a new node to replace the unresponsive one
 	go s.raiseSpecificNode(
@@ -456,7 +456,7 @@ func (s *registryServer) raiseRequiredNodes(required int) {
 
 	}
 
-	fmt.Printf("Raised required nodes to %d\n", required)
+	fmt.Printf("Raised %d\n nodes", required)
 }
 
 func (s *registryServer) raiseSpecificNode(id string, requiredNodes int, port int, totalRounds int, startRound int, maxDiscoveryRetries int, weightWaitTimeoutSeconds int, trainingSetPercentage float32, numEpochs int) {
@@ -480,7 +480,7 @@ func (s *registryServer) raiseSpecificNode(id string, requiredNodes int, port in
 
 	err := utils.LaunchTask("federated_cluster", "client_task", 1, "Main", env)
 	if err != nil {
-		log.Printf("[ERROR] AWS Error launching respawned node %s: %v\n", id, err)
+		log.Printf("AWS Error launching respawned node %s: %v\n", id, err)
 		// Se il lancio fallisce, ripristiniamo il conteggio dei nodi pending
 		s.mu.Lock()
 		if s.pendingNodes > 0 {
@@ -561,7 +561,7 @@ func main() {
 	port := ":8080"
 	lis, err := net.Listen("tcp", port)
 	if err != nil {
-		log.Fatalf("[FATAL] Failed to listen on port %s: %v", port, err)
+		log.Fatalf("Failed to listen on port %s: %v", port, err)
 	}
 
 	// 2. Create a new gRPC server instance
@@ -578,12 +578,9 @@ func main() {
 	// 4. Register our server with the gRPC framework
 	pb.RegisterRegistryServiceServer(grpcServer, myServer)
 
-	// Raise the N nodes to start the training uncomment if needed
-	//myServer.raiseRequiredNodes(1)
-
 	// 5. Start serving incoming requests
-	log.Printf("[INFO] Go Service Registry is running and listening on port %s...\n", port)
+	log.Printf("Go Service Registry is running and listening on port %s...\n", port)
 	if err := grpcServer.Serve(lis); err != nil {
-		log.Fatalf("[FATAL] Failed to serve gRPC server: %v", err)
+		log.Fatalf("Failed to serve gRPC server: %v", err)
 	}
 }

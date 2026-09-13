@@ -31,7 +31,7 @@ def start_grpc_server(port: int, my_id: str) -> tuple:
     server.add_insecure_port(f'[::]:{port}')
     server.start()
 
-    print(f"[Server] Background gRPC server listening on port {port}...")
+    print(f"Background gRPC server listening on port {port}...")
     return server, servicer
 
 def get_ecs_container_ip():
@@ -92,13 +92,13 @@ def run_training_loop(config, global_model, servicer, registry_client, MY_ID, de
     # RESPAWN RECOVERY: Ripristino stato dai Peer
     # ==========================================
     if RESPAWNED:
-        print("\n[Recovery] Nodo identificato come RESPAWNED. Avvio recupero pesi dai peer...")
+        print("\nNodo identified as RESPAWNED. Starting weights recovery from peers...")
         
         # 1. Chiedo i pesi a tutti i peer della lista
         for peer in peers: 
             servicer.get_weights_from_peer(peer['ip'], peer['port'], peer['id'], MY_ID, start_round)
 
-        print("[Wait] In attesa dei pesi locali dai peer per completare il recovery...")
+        print("Waiting for local weights from peers to complete recovery...")
         start_wait_time = time.time()
         
         # Attesa dei pesi con timeout
@@ -115,10 +115,10 @@ def run_training_loop(config, global_model, servicer, registry_client, MY_ID, de
             round_payloads = servicer.received_weights.get(start_round, [])
 
         if not round_payloads:
-            print("[Error] Nessun peso ricevuto dai peer durante il recovery. Fallimento recovery.")
+            print("No weights received from peers during recovery. Recovery failed.")
             return
 
-        print(f"[Aggregate] Recovery: Esecuzione FedAvg su {len(round_payloads)} modelli ricevuti dai peer...")
+        print(f"Recovery: Execution of FedAvg on {len(round_payloads)} models received from peers...")
         round_payloads.sort(key=lambda x: x.sender_id)
         deserialized_models = []
 
@@ -133,11 +133,11 @@ def run_training_loop(config, global_model, servicer, registry_client, MY_ID, de
         global_model = apply_fedavg(global_model, deserialized_models)
         servicer.received_weights.clear()
         
-        # Avanziamo il round dato che abbiamo recuperato lo stato di quello precedente
+        # Advance round (skip current round since we just recovered it)
         start_round += 1
-        print(f"[Recovery] Modello ripristinato con successo. Il training ripartirà dal round {start_round + 1}.")
+        print(f"Model succesfully restored. The training will resume from round {start_round + 1}.")
 
-    print(f"\n[Training] Avvio sessione di addestramento. Peers: {len(peers)}, Fanout (k): {k}")
+    print(f"\nStarting training session. Peers: {len(peers)}, Fanout (k): {k}")
     start_training_time = time.time()
 
     # 2. Ciclo dei Round
@@ -180,7 +180,7 @@ def run_training_loop(config, global_model, servicer, registry_client, MY_ID, de
                     num_samples=my_samples
                 )
                 if send_weights_to_peer(peer['ip'], peer['port'], peer['id'], payload) == 1:
-                    print(f"[Warning] Peer {peer['id']} unresponsive. Cleanup...")
+                    print(f"Warning: Peer {peer['id']} unresponsive. Cleanup...")
                     servicer.remove_peer_by_id(peer['id'])
                     peers = servicer.peers
                     registry_client.signal_unresponsive_node(
@@ -190,22 +190,22 @@ def run_training_loop(config, global_model, servicer, registry_client, MY_ID, de
 
             # D. Wait Weights
             start_wait_time = time.time()
-            print(f"[Wait] In attesa dei pesi dai peer per il round {round_num + 1} (Timeout: {weight_wait_timeout}s)...")
+            print(f"Waiting for weights from peers for round {round_num + 1} (Timeout: {weight_wait_timeout}s)...")
             enough_weights_received = False
             while True:
                 with servicer.lock:
                     current_round_weights = servicer.received_weights.get(round_num, [])
                     if len(current_round_weights) >= len(peers):
-                        print(f"[Info] Tutti i pesi ricevuti dai peer per il round {round_num + 1}.")
+                        print(f"All weights received from peers for round {round_num + 1}.")
                         break
                     if len(current_round_weights) >= math.ceil(actual_k/2):
                         enough_weights_received = True
 
                 if time.time() - start_wait_time > weight_wait_timeout:
                     if not enough_weights_received:
-                        print(f"[Warning] Timeout! Proseguo con {len(current_round_weights)} modelli ricevuti.")
+                        print(f"Warning: Timeout! Proceeding with {len(current_round_weights)} models received.")
                     else:
-                        print(f"[Info] Ricevuti abbastanza pesi per il round {round_num + 1}.")
+                        print(f"Received enough weights for round {round_num + 1}.")
                     break
                 time.sleep(0.5)
                 
@@ -233,7 +233,7 @@ def run_training_loop(config, global_model, servicer, registry_client, MY_ID, de
             
             # HASH PRIMA DI FEDAVG
             fc_hash_before = get_model_hash(global_model, only_trainable=True)
-            print(f"[VERIFICATION] PRIMA DI FEDAVG round {round_num + 1} Model Classifier SHA-256: {fc_hash_before}")
+            print(f"VERIFICATION: BEFORE FEDAVG round {round_num + 1} Model Classifier SHA-256: {fc_hash_before}")
 
             # Applicazione FedAvg
             global_model = apply_fedavg(global_model, deserialized_models)
@@ -244,10 +244,10 @@ def run_training_loop(config, global_model, servicer, registry_client, MY_ID, de
 
             # HASH DOPO FEDAVG
             fc_hash_after = get_model_hash(global_model, only_trainable=True)
-            print(f"[VERIFICATION] DOPO FEDAVG round {round_num + 1} Model Classifier SHA-256: {fc_hash_after}")
+            print(f"VERIFICATION: AFTER FEDAVG round {round_num + 1} Model Classifier SHA-256: {fc_hash_after}")
 
             comm_time = time.time() - start_comm
-            print(f"Round {round_num}: Tempo Calcolo = {compute_time:.2f}s, Tempo Rete/Attesa = {comm_time:.2f}s")
+            print(f"Round {round_num}: Computing time = {compute_time:.2f}s, Network/Waiting time = {comm_time:.2f}s")
 
             # tempi da stampare alla fine
             total_compute_time_acc += compute_time
@@ -262,8 +262,8 @@ def run_training_loop(config, global_model, servicer, registry_client, MY_ID, de
         if rounds_executed > 0:
             avg_compute = total_compute_time_acc / rounds_executed
             avg_comm = total_comm_time_acc / rounds_executed
-            print(f"MEDIA Tempo di Calcolo per round: {avg_compute:.2f}s")
-            print(f"MEDIA Tempo di Rete/Attesa per round: {avg_comm:.2f}s")
+            print(f"MEAN Computing time per round: {avg_compute:.2f}s")
+            print(f"MEAN Network/Waiting time per round: {avg_comm:.2f}s")
 
         # ==========================================
         # VERIFICA DEGLI HASH FINALI
@@ -272,19 +272,19 @@ def run_training_loop(config, global_model, servicer, registry_client, MY_ID, de
         full_hash_final = get_model_hash(global_model, only_trainable=False)
 
         print("\n" + "="*10)
-        print(f"[VERIFICATION] Final Model Classifier SHA-256: {fc_hash_final}")
-        print(f"[VERIFICATION] Final Model Full SHA-256:       {full_hash_final}")
+        print(f"VERIFICATION: Final Model Classifier SHA-256: {fc_hash_final}")
+        print(f"VERIFICATION: Final Model Full SHA-256:       {full_hash_final}")
         print("="*10 + "\n")
 
         # Evaluation
-        print("Valutazione finale del modello globale sul test set locale")
+        print("Final evaluation of globlal model on local test set...")
         try:
             SentimentPyTorch.evaluate_global(global_model, X_val, Mask_val, Y_val, device)
         except Exception as e:
-            print(f"[Error] Valutazione globale fallita: {e}")
+            print(f"Error: Final evaluation failed: {e}")
 
     except Exception as e:
-        print(f"[Error] Eccezione durante il training loop: {e}")
+        print(f"Error: Exception occurred during training loop: {e}")
 
 def main():
     # 1. Lettura ENV
@@ -304,7 +304,7 @@ def main():
     torch.manual_seed(42)
     global_model = SentimentPyTorch(num_class=2).to(device)
 
-    print(f"[Init] Nodo ID: {MY_ID}, IP: {MY_IP}, PORT: {MY_PORT}, STARTER: {STARTER}, RESPAWNED: {RESPAWNED}")
+    print(f"Init: Node ID: {MY_ID}, IP: {MY_IP}, PORT: {MY_PORT}, STARTER: {STARTER}, RESPAWNED: {RESPAWNED}")
 
     # ==========================================
     # REGISTRAZIONE DIVERSIFICATA (RESPAWNED vs NORMAL)
@@ -315,13 +315,13 @@ def main():
 
     if not RESPAWNED:
         if not registry_client.register_node(MY_IP, MY_PORT, initial_status):
-            print("[Fatal] Error connecting to Registry. Exiting.")
+            print("Error connecting to Registry. Exiting.")
             server.stop(grace=0)
             return
     else:
-        print("[Init] Nodo avviato in modalità RESPAWNED.")
+        print("Node started in RESPAWNED mode.")
         if not registry_client.register_respawned_node(MY_IP, MY_PORT):
-            print("[Fatal] Error connecting to Registry for respawned node. Exiting.")
+            print("Error connecting to Registry for respawned node. Exiting.")
             server.stop(grace=0)
             return
 
@@ -332,7 +332,7 @@ def main():
             
             if is_starter_execution:
                 # Flusso STARTER
-                print("\n[Starter] Nodo STARTER. Fase discovery...")
+                print("\nSTARTER Node. Discovery phase...")
                 
                 training_nodes = int(os.getenv("TRAINING_NODES", 5))
                 total_rounds = int(os.getenv("TOTAL_ROUNDS", 5))
@@ -347,16 +347,16 @@ def main():
                 retries = 0
                 while len(peers) < num_peers_required:
                     if retries >= max_retries:
-                        print("[Error] Discovery timeout.")
+                        print("Error: Discovery timeout.")
                         break
-                    print(f"[Discovery] Fetching peers ({retries+1}/{max_retries})...")
+                    print(f"Discovery: Fetching peers ({retries+1}/{max_retries})...")
                     peers = registry_client.get_peer_list(node_request_count=num_peers_required)
                     if len(peers) < num_peers_required:
                         time.sleep(5)
                         retries += 1
                 
                 if len(peers) < num_peers_required:
-                    print("[Aborting] Impossibile avviare il training per assenza peer.")
+                    print("Error: Unable to start training due to missing peers.")
                 else:
                     starter_peer = {"id": MY_ID, "ip": MY_IP, "port": MY_PORT}
                     config = {
@@ -382,7 +382,7 @@ def main():
                         'peers': [*peers, starter_peer]  # Include the starter node itself in the peers list
                     }
                     
-                    print("[Starter] Invio RPC StartTraining ai peer...")
+                    print("STARTER Node. Sending RPC StartTraining to peers...")
                     for peer in peers:
                         servicer.send_start_training_signal(peer, peers_config)
 
@@ -390,13 +390,13 @@ def main():
 
             else:
                 # Flusso SUPPORT NODE / IDLE
-                print("\n[Idle] In attesa di richieste di addestramento (Timeout: 5 minuti)...")
+                print("\nIDLE: Waiting for training requests (Timeout: 5 minutes)...")
                 servicer.start_training_event.clear()
                 
                 received_signal = servicer.start_training_event.wait(timeout=300)
 
                 if not received_signal:
-                    print("\n[Timeout] Nessuna richiesta nei 5 minuti di idle. Spegnimento...")
+                    print("\nNo requests in 5 minutes of idle. Shutting down...")
                     break
 
                 config = servicer.pending_training_config
@@ -408,25 +408,25 @@ def main():
                     run_training_loop(
                         config, global_model, servicer, registry_client, MY_ID, device, RESPAWNED)
                 except Exception as e:
-                    print(f"[Error Main] Errore durante l'esecuzione del training: {e}")
+                    print(f"Error during training execution: {e}")
                 RESPAWNED = False
 
             # RESET DEL MODELLO GLOBALE PER NUOVE ESECUZIONI
-            print("\n[Reset] Reinizializzazione del modello globale per future sessioni...")
+            print("\nRestarting global model for future executions...")
             torch.manual_seed(42)
             global_model = SentimentPyTorch(num_class=2).to(device)
 
             # Ripristino stato IDLE
-            print("\n[Status] Ripristino stato a IDLE per 5 minuti...")
+            print("\nRestoring status to IDLE for 5 minutes...")
             registry_client.update_status("idle")
 
     except KeyboardInterrupt:
-        print("\n[Shutdown] Interruzione manuale.")
+        print("\nShutdown (KeyboardInterrupt).")
     finally:
-        print("[Shutdown] Unregister e arresto gRPC...")
+        print("Shutdown. Unregistering and stopping gRPC...")
         registry_client.unregister_node(MY_IP, MY_PORT)
         server.stop(grace=5)
-        print("[Shutdown] Done.")
+        print("Done.")
     
     
 if __name__ == "__main__":

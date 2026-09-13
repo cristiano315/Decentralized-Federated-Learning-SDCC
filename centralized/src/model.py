@@ -50,7 +50,7 @@ class SentimentPyTorch(nn.Module):
 
     @staticmethod
     def prepare_dataset(bucket_name, s3_key, num_samples, training_set_percentage, start_index, truncated_training_length, max_samples_per_client=1000, seed=42):
-        print("[Data Prep] Loading JSON data...")
+        print("Loading JSON data...")
         
         # Load JSON data from S3
         s3 = boto3.client('s3')
@@ -82,8 +82,8 @@ class SentimentPyTorch(nn.Module):
             client_texts = texts[start_idx:] + texts[:remainder]
             client_labels = labels[start_idx:] + labels[:remainder]
 
-        print(f"[Data Prep] Client {client_id}: estratti {len(client_texts)} campioni totali (Start index: {start_idx}).")
-        print("[Data Prep] Tokenizing with DistilBERT...")
+        print(f"Client {client_id}: extracted {len(client_texts)} instances (Start index: {start_idx}).")
+        print("Tokenizing with DistilBERT...")
         tokenizer = DistilBertTokenizer.from_pretrained('distilbert-base-uncased')
 
         # This handles cleaning, tokenizing, and padding all at once
@@ -93,7 +93,7 @@ class SentimentPyTorch(nn.Module):
         Mask = encoded['attention_mask']
         Y = torch.tensor(client_labels, dtype=torch.int64)
 
-        print("[Data Prep] Splitting dataset...")
+        print("Splitting dataset...")
         test_size = 1.0 - training_set_percentage
         # sklearn train_test_split on the tensors to get training set and test set for the model
         X_train, X_val, Mask_train, Mask_val, Y_train, Y_val = train_test_split(
@@ -139,7 +139,7 @@ class SentimentPyTorch(nn.Module):
         
         num_training_samples = len(Y_train)
 
-        print(f"[Train] Starting local training on {num_training_samples} samples with batch size {batch_size}, Totale batch per epoca: {len(train_loader)}...")
+        print(f"Starting local training on {num_training_samples} samples with batch size {batch_size}, Totale batch per epoca: {len(train_loader)}...")
         
         # Fase di Training
         for epoch in range(num_epochs):
@@ -163,7 +163,7 @@ class SentimentPyTorch(nn.Module):
                 # CONTROLLO A GRANA FINE: Stampa log ogni 10 batch
                 # -----------------------------------------------------
                 if (batch_idx + 1) % 10 == 0 or (batch_idx + 1) == len(train_loader):
-                    print(f"[Train] Epoch {epoch+1:02d} | Batch {batch_idx+1:04d}/{len(train_loader):04d} | Current Batch Loss: {loss.item():.4f}")
+                    print(f"Epoch {epoch+1:02d} | Batch {batch_idx+1:04d}/{len(train_loader):04d} | Current Batch Loss: {loss.item():.4f}")
 
             avg_train_loss = total_train_loss / num_training_samples
 
@@ -213,7 +213,7 @@ class SentimentPyTorch(nn.Module):
         total_loss = 0.0
 
         print(
-            f"[Global Eval] Avvio inferenza su {len(Y_test)} campioni (Binario). Batch totali: {len(test_loader)}"
+            f"Starting inference on {len(Y_test)} samples (Binary) for global evaluation. Total batches: {len(test_loader)}"
         )
 
         with torch.no_grad():
@@ -246,7 +246,7 @@ class SentimentPyTorch(nn.Module):
                     test_loader
                 ):
                     print(
-                        f"[Global Eval] Batch {batch_idx+1:04d}/{len(test_loader):04d} completato."
+                        f"Batch {batch_idx+1:04d}/{len(test_loader):04d} completed."
                     )
 
         metrics = {
@@ -260,7 +260,7 @@ class SentimentPyTorch(nn.Module):
         }
 
         print("\n" + "=" * 45)
-        print(f"[RISULTATI GLOBALI]")
+        print(f"[GLOBAL RESULTS]")
         print(f"Loss: {metrics['loss']:.4f} | Acc: {metrics['accuracy']:.4f}")
         print(
             f"Precision: {metrics['precision']:.4f} | Recall: {metrics['recall']:.4f}"

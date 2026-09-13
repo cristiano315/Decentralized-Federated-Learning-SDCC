@@ -62,7 +62,7 @@ class FederatedCoordinator:
             channel.close()
             return True
         except Exception as e:
-            print(f"[Coordinator Error] Fallito l'invio del modello globale a {node_address}: {e}")
+            print(f"Error: Failed to send global model to {node_address}: {e}")
             return False
 
     def broadcast_global_model(self, node_addresses, model_bytes, round_num):
@@ -80,7 +80,7 @@ class FederatedCoordinator:
 
     def run_coordination_loop(self):
         print("\n" + "="*40)
-        print("    AVVIO COORDINATORE FEDERATED LEARNING    ")
+        print("    STARTING FEDERATED LEARNING COORDINATOR   ")
         print("="*40)
 
         # 1. Discovery dei Nodi dal Registry
@@ -92,25 +92,25 @@ class FederatedCoordinator:
         s3_key = "all_data_niid_05_keep_3_train_9.json"
         while len(active_nodes) < num_peers_required:
             if retries >= max_retries:
-                print("[Error] Discovery timeout.")
+                print("Error: Discovery timeout.")
                 break
-            print(f"[Discovery] Fetching peers ({retries+1}/{max_retries})...")
+            print(f"Discovery: Fetching peers ({retries+1}/{max_retries})...")
             active_nodes = self.registry_client.get_peer_list(node_request_count=num_peers_required)
             if len(active_nodes) < num_peers_required:
                 time.sleep(5)
                 retries += 1
         
         if len(active_nodes) < num_peers_required:
-            print("[Aborting] Impossibile avviare il training per assenza peer.")
+            print("Error: Unable to start training due to insufficient peers.")
             return
 
-        print(f"[Coordinator] Nodi reclutati per l'addestramento: {active_nodes}")
+        print(f"Nodes recruited for training: {active_nodes}")
 
         # 2. Avvio dell'addestramento sui nodi (Start Training Signal) e inizializzazione modello
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         torch.manual_seed(42)
         global_model = SentimentPyTorch(num_class=2).to(device)
-        print("[Coordinator] Invio segnale di avvio (StartTraining) a tutti i nodi...")
+        print("Sending StartTraining signal to all nodes...")
         indexes = get_training_index_list(active_nodes, bucket_name, s3_key, self.config['training_set_percentage'], max_samples_per_client=1000)
         self.broadcast_start_signal(active_nodes, indexes)
 
@@ -134,12 +134,12 @@ class FederatedCoordinator:
                 
                 # Se tutti i nodi attivi hanno risposto
                 if received_count >= len(active_nodes):
-                    print(f"[Coordinator] Pesi ricevuti da tutti i nodi ({received_count}/{len(active_nodes)}).")
+                    print(f"Weights received from all nodes ({received_count}/{len(active_nodes)}).")
                     break
                 
                 # Handling Timeout
                 if time.time() - start_wait_time > weight_timeout:
-                    print(f"[Coordinator Timeout] Timeout raggiunto per il Round {round_num + 1}. Ricevuti pesi da {received_count}/{len(active_nodes)} nodi.")
+                    print(f"Timeout reached for Round {round_num + 1}. Weights received from {received_count}/{len(active_nodes)} nodes.")
                     break
                 
                 time.sleep(1)
@@ -148,7 +148,7 @@ class FederatedCoordinator:
             with self.servicer.lock:
                 round_payloads = self.servicer.received_weights.get(round_num, [])
 
-            print(f"[Coordinator] Esecuzione FedAvg su {len(round_payloads)} contributi...")
+            print(f"Executing FedAvg on {len(round_payloads)} contributions...")
 
             round_payloads.sort(key=lambda x: x.sender_id)
             deserialized_models = []
@@ -163,7 +163,7 @@ class FederatedCoordinator:
             
             # HASH PRIMA DI FEDAVG
             fc_hash_before = get_model_hash(global_model, only_trainable=True)
-            print(f"[VERIFICATION] PRIMA DI FEDAVG round {round_num + 1} Model Classifier SHA-256: {fc_hash_before}")
+            print(f"VERIFICATION: BEFORE FEDAVG round {round_num + 1} Model Classifier SHA-256: {fc_hash_before}")
 
             # Applicazione FedAvg
             global_model = apply_fedavg(global_model, deserialized_models)
@@ -174,7 +174,7 @@ class FederatedCoordinator:
 
             # HASH DOPO FEDAVG
             fc_hash_after = get_model_hash(global_model, only_trainable=True)
-            print(f"[VERIFICATION] DOPO FEDAVG round {round_num + 1} Model Classifier SHA-256: {fc_hash_after}")
+            print(f"VERIFICATION: AFTER FEDAVG round {round_num + 1} Model Classifier SHA-256: {fc_hash_after}")
 
             # Caricamento nel modello locale per verifica
             global_bytes = get_weights_as_bytes(global_model)
@@ -182,14 +182,14 @@ class FederatedCoordinator:
             with self.servicer.lock:
                 self.servicer.latest_global_bytes = global_bytes
 
-            print(f"[Coordinator] Round {round_num + 1} completato.")
+            print(f"Round {round_num + 1} completed.")
 
             # Broadcast del nuovo modello ai worker
-            print(f"[Coordinator] Invio del nuovo modello aggregato ai nodi...")
+            print(f"Sending updated global model to all nodes for Round {round_num + 1}...")
             self.broadcast_global_model(active_nodes, global_bytes, round_num)
 
         print("\n" + "="*40)
-        print("  ADDESTRAMENTO FEDERATO COMPLETATO CON SUCCESSO ")
+        print("  FEDERATED TRAINING COMPLETED SUCCESSFULLY  ")
         print("="*40)
 
 
@@ -200,7 +200,7 @@ def start_coordinator_server(port: int):
     federated_pb2_grpc.add_FederatedServerServicer_to_server(servicer, server)
     server.add_insecure_port(f'[::]:{port}')
     server.start()
-    print(f"[Coordinator] Server gRPC in ascolto sulla porta {port}...")
+    print(f"gRPC server listening on port: {port}...")
     return server, servicer
 
 
@@ -244,10 +244,10 @@ def main():
     try:
         coordinator.run_coordination_loop()
     except KeyboardInterrupt:
-        print("\n[Coordinator] Arresto forzato da tastiera.")
+        print("\nShutdown (KeyboardInterrupt).")
     finally:
         server.stop(grace=5)
-        print("[Coordinator] Server gRPC arrestato.")
+        print("Shutdown. gRPC server stopped.")
 
 
 if __name__ == "__main__":

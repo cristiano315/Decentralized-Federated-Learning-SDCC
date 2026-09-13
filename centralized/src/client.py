@@ -25,7 +25,7 @@ def start_grpc_server(port: int, my_id: str) -> tuple:
     server.add_insecure_port(f'[::]:{port}')
     server.start()
 
-    print(f"[Server] Background gRPC server listening on port {port}...")
+    print(f"Background gRPC server listening on port {port}...")
     return server, servicer
 
 def run_training_loop(config, global_model, servicer, MY_ID, device, RESPAWNED):
@@ -54,12 +54,12 @@ def run_training_loop(config, global_model, servicer, MY_ID, device, RESPAWNED):
     # RESPAWN RECOVERY: Ripristino stato dai Peer
     # ==========================================
     if RESPAWNED:
-        print("\n[Recovery] Nodo identificato come RESPAWNED. Avvio recupero pesi dai peer...")
+        print("\nNodo identified as RESPAWNED. Starting weights recovery...")
         
         # 1. Chiedo il modello aggiornato al coordinatore
         #ask model to coordinator
 
-        print("[Wait] In attesa dei pesi locali dai peer per completare il recovery...")
+        print("Waiting for local weights from peers to complete recovery...")
         start_wait_time = time.time()
         
         # Attesa dei pesi con timeout
@@ -76,7 +76,7 @@ def run_training_loop(config, global_model, servicer, MY_ID, device, RESPAWNED):
             current_model = servicer.received_model
 
         if not current_model:
-            print("[Error] Nessun modello ricevuto dal coordinatore durante il recovery. Fallimento recovery.")
+            print("Error: No model received from coordinator during recovery. Recovery failed.")
             return
 
         current_weights = load_weights_from_bytes(current_model)
@@ -85,9 +85,9 @@ def run_training_loop(config, global_model, servicer, MY_ID, device, RESPAWNED):
         
         # Avanziamo il round dato che abbiamo recuperato lo stato di quello precedente
         start_round += 1
-        print(f"[Recovery] Modello ripristinato con successo. Il training ripartirà dal round {start_round + 1}.")
+        print(f"[Model succesfully restored. The training will resume from round {start_round + 1}.")
 
-    print(f"\n[Training] Avvio sessione di addestramento.")
+    print(f"\nStarting training session.")
     start_training_time = time.time()
 
     # 2. Ciclo dei Round
@@ -124,22 +124,20 @@ def run_training_loop(config, global_model, servicer, MY_ID, device, RESPAWNED):
                 num_samples=my_samples
             )
             if send_weights_to_coordinator(coordinator_address, payload) == 1:
-                print(f"[Warning] coordinator unresponsive. Fault recovery initiated...")
-                #implement
-
+                print(f"Coordinator unresponsive. Exiting training...")
+                return
             # D. Wait Weights
             start_wait_time = time.time()
-            print(f"[Wait] In attesa dei pesi dal coordinatore per il round {round_num + 1} (Timeout: {weight_wait_timeout}s)...")
+            print(f"Waiting for weights from coordinator for round {round_num + 1} (Timeout: {weight_wait_timeout}s)...")
             while True:
                 with servicer.lock:
                     current_round_weights = servicer.received_model
                     if current_round_weights:
-                        print(f"[Received] Pesi ricevuti per il round {round_num}.")
+                        print(f"Weights received for round {round_num}.")
                         break
                 if time.time() - start_wait_time > weight_wait_timeout:
-                    print(f"[Warning] Timeout! Coordinatore non risponde.")
-                    # ping coordinator and eventually fault detection
-                    break
+                    print(f"Warning: Timeout! Coordinator unresponsive. Exiting training...")
+                    return
                 time.sleep(0.5)
                 
             # E. Aggregazione (FedAvg) fatta dal coordinatore
@@ -150,7 +148,7 @@ def run_training_loop(config, global_model, servicer, MY_ID, device, RESPAWNED):
             servicer.received_model = None
 
             comm_time = time.time() - start_comm
-            print(f"Round {round_num}: Tempo Calcolo = {compute_time:.2f}s, Tempo Rete/Attesa = {comm_time:.2f}s")
+            print(f"Round {round_num}: Computing time = {compute_time:.2f}s, Network/Waiting time = {comm_time:.2f}s")
             
             # tempi da stampare alla fine
             total_compute_time_acc += compute_time
@@ -165,8 +163,8 @@ def run_training_loop(config, global_model, servicer, MY_ID, device, RESPAWNED):
         if rounds_executed > 0:
             avg_compute = total_compute_time_acc / rounds_executed
             avg_comm = total_comm_time_acc / rounds_executed
-            print(f"MEDIA Tempo di Calcolo per round: {avg_compute:.2f}s")
-            print(f"MEDIA Tempo di Rete/Attesa per round: {avg_comm:.2f}s")
+            print(f"MEAN Computing time per round: {avg_compute:.2f}s")
+            print(f"MEAN Network/Waiting time per round: {avg_comm:.2f}s")
 
         # ==========================================
         # VERIFICA DEGLI HASH FINALI
@@ -180,14 +178,14 @@ def run_training_loop(config, global_model, servicer, MY_ID, device, RESPAWNED):
         print("="*10 + "\n")
 
         # Evaluation
-        print("Valutazione globale su modello finale")
+        print("Global evaluation on final model")
         try:
             SentimentPyTorch.evaluate_global(global_model, X_val, Mask_val, Y_val, device)
         except Exception as e:
-            print(f"[Error] Valutazione globale fallita: {e}")
+            print(f"Error: Global evaluation failed: {e}")
 
     except Exception as e:
-        print(f"[Error] Eccezione durante il training loop: {e}")
+        print(f"Error: Exception during training loop: {e}")
 
 def main():
     # 1. Lettura ENV
@@ -213,13 +211,13 @@ def main():
 
     if not RESPAWNED:
         if not registry_client.register_node(MY_IP, MY_PORT, initial_status):
-            print("[Fatal] Error connecting to Registry. Exiting.")
+            print("Error connecting to Registry. Exiting.")
             server.stop(grace=0)
             return
     else:
-        print("[Init] Nodo avviato in modalità RESPAWNED.")
+        print("Node started in RESPAWNED mode.")
         if not registry_client.register_respawned_node(MY_IP, MY_PORT):
-            print("[Fatal] Error connecting to Registry for respawned node. Exiting.")
+            print("Error connecting to Registry for respawned node. Exiting.")
             server.stop(grace=0)
             return
 
@@ -229,13 +227,13 @@ def main():
             config = None
             
             # Flusso SUPPORT NODE / IDLE
-            print("\n[Idle] In attesa di richieste di addestramento (Timeout: 5 minuti)...")
+            print("\nIDLE: Waiting for training requests (Timeout: 5 minutes)...")
             servicer.start_training_event.clear()
             
             received_signal = servicer.start_training_event.wait(timeout=300)
 
             if not received_signal:
-                print("\n[Timeout] Nessuna richiesta nei 5 minuti di idle. Spegnimento...")
+                print("\nNo requests in 5 minutes of idle. Shutting down...")
                 break
 
             config = servicer.pending_training_config
@@ -247,25 +245,25 @@ def main():
                     run_training_loop(
                         config, global_model, servicer, MY_ID, device, RESPAWNED)
                 except Exception as e:
-                    print(f"[Error Main] Errore durante l'esecuzione del training: {e}")
+                    print(f"Error during training execution: {e}")
                 RESPAWNED = False
 
             # RESET DEL MODELLO GLOBALE PER NUOVE ESECUZIONI
-            print("\n[Reset] Reinizializzazione del modello globale per future sessioni...")
+            print("\nRestarting global model for future executions...")
             torch.manual_seed(42)
             global_model = SentimentPyTorch(num_class=2).to(device)
 
             # Ripristino stato IDLE
-            print("\n[Status] Ripristino stato a IDLE per 5 minuti...")
+            print("\nRestoring status to IDLE for 5 minutes...")
             registry_client.update_status("idle")
 
     except KeyboardInterrupt:
-        print("\n[Shutdown] Interruzione manuale.")
+        print("\nShutdown (KeyboardInterrupt).")
     finally:
-        print("[Shutdown] Unregister e arresto gRPC...")
+        print("Shutdown. Unregistering and stopping gRPC...")
         registry_client.unregister_node(MY_IP, MY_PORT)
         server.stop(grace=5)
-        print("[Shutdown] Done.")
+        print("Done.")
     
     
 if __name__ == "__main__":
