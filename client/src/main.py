@@ -11,7 +11,7 @@ import urllib
 import copy
 import threading
 
-# Import generated gRPC code
+# import generated gRPC code
 from rpc_calls import RegistryClient, send_weights_to_peer
 from rpc_calls import FederatedNodeServicer
 import federated_pb2 as federated_pb2
@@ -22,9 +22,8 @@ from aggregator import apply_fedavg
 from utils import calculate_k, get_weights_as_bytes, load_weights_from_bytes, get_model_hash
 
 def start_grpc_server(port: int, my_id: str) -> tuple:
-    """
-    Initializes and starts the background gRPC server.
-    """
+    """setup the client gRPC server."""
+    
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
     servicer = FederatedNodeServicer(my_id=my_id)
     federated_pb2_grpc.add_FederatedNodeServicer_to_server(servicer, server)
@@ -55,9 +54,9 @@ def get_ecs_container_ip():
     return "IP address not found in metadata"
 
 def run_training_loop(config, global_model, servicer, registry_client, MY_ID, device, RESPAWNED):
-    """
-    Logica dell'addestramento federato con gestione Respawn
-    """
+    """handle federated learning and client failure"""
+    
+    # extract all variables from config
     training_nodes = config['training_nodes']
     total_rounds = config['total_rounds']
     start_round = config['start_round']
@@ -66,7 +65,7 @@ def run_training_loop(config, global_model, servicer, registry_client, MY_ID, de
     training_set_percentage = config['training_set_percentage']
     num_epochs = config['num_epochs']
     
-    # 1. Preparazione Dataset
+    # preparazione dataset
     bucket_name = "sdcc-dataset-264452429750-us-east-1-an"
     s3_key = "all_data_niid_05_keep_3_train_9.json"
     X_train, Mask_train, Y_train, X_val, Mask_val, Y_val, X_test, Mask_test, Y_test = SentimentPyTorch.prepare_dataset(
@@ -79,29 +78,28 @@ def run_training_loop(config, global_model, servicer, registry_client, MY_ID, de
     )
     my_samples = len(Y_train)
     
+    # setup servicer for gossiping
     servicer.num_samples = my_samples
     servicer.peers = peers
     k = calculate_k(peers)
     servicer.fanout = k
-    servicer.received_weights.clear()  # Clear any previous weights
-    servicer.seen_messages.clear()  # Clear seen messages to avoid stale data
-    servicer.latest_local_weights = None  # Reset latest local weights
-    servicer.round_num = start_round  # Set the round number for the servicer
+    servicer.received_weights.clear()
+    servicer.seen_messages.clear()
+    servicer.latest_local_weights = None
+    servicer.round_num = start_round
     
-    # ==========================================
-    # RESPAWN RECOVERY: Ripristino stato dai Peer
-    # ==========================================
+    # if a node is the backup from a failure, RESPAWNED = True
     if RESPAWNED:
         print("\nNodo identified as RESPAWNED. Starting weights recovery from peers...")
         
-        # 1. Chiedo i pesi a tutti i peer della lista
+        # ask weights to all the other peers
         for peer in peers: 
             servicer.get_weights_from_peer(peer['ip'], peer['port'], peer['id'], MY_ID, start_round)
 
         print("Waiting for local weights from peers to complete recovery...")
         start_wait_time = time.time()
         
-        # Attesa dei pesi con timeout
+        # recieve weights from other peers
         while True:
             with servicer.lock:
                 rec_weights = servicer.received_weights.get(start_round, [])
@@ -114,10 +112,12 @@ def run_training_loop(config, global_model, servicer, registry_client, MY_ID, de
         with servicer.lock:
             round_payloads = servicer.received_weights.get(start_round, [])
 
+        # need at least one model recieved from another peer to rebuild the model, this is not the first round
         if not round_payloads:
             print("No weights received from peers during recovery. Recovery failed.")
             return
 
+        # fedavg application with the models recieved
         print(f"Recovery: Execution of FedAvg on {len(round_payloads)} models received from peers...")
         round_payloads.sort(key=lambda x: x.sender_id)
         deserialized_models = []
@@ -140,8 +140,8 @@ def run_training_loop(config, global_model, servicer, registry_client, MY_ID, de
     print(f"\nStarting training session. Peers: {len(peers)}, Fanout (k): {k}")
     start_training_time = time.time()
 
-    # 2. Ciclo dei Round
-    # Variabili statistiche sui tempi di training e sui tempi di scambio messaggi
+    # actual training cycle
+    # variables for time statistics
     total_compute_time_acc = 0.0
     total_comm_time_acc = 0.0
     rounds_executed = 0
@@ -150,7 +150,7 @@ def run_training_loop(config, global_model, servicer, registry_client, MY_ID, de
         for round_num in range(start_round, total_rounds):
             print(f"\n{'='*10} ROUND {round_num + 1}/{total_rounds} {'='*10}")
             
-            # A. Local Training
+            # local Training
             start_compute = time.time()
             global_model, my_samples = SentimentPyTorch.train_local(
                 model=global_model, 
@@ -161,14 +161,14 @@ def run_training_loop(config, global_model, servicer, registry_client, MY_ID, de
             )
             compute_time = time.time() - start_compute
 
-            # B. Serializzazione
+            # serialization
             start_comm = time.time()
             payload_bytes = get_weights_as_bytes(global_model)
             servicer.latest_local_weights = payload_bytes
             servicer.round_num = round_num
             servicer.seen_messages.add((MY_ID, round_num))
             
-            # C. Gossip
+            # send weights to other peer with gossiping
             actual_k = min(k, len(peers))
             initial_gossip_peers = random.sample(peers, actual_k)
             
@@ -188,7 +188,7 @@ def run_training_loop(config, global_model, servicer, registry_client, MY_ID, de
                         training_nodes, total_rounds, start_round, 5, weight_wait_timeout, training_set_percentage, num_epochs
                     )
 
-            # D. Wait Weights
+            # wait weights from other peer
             start_wait_time = time.time()
             print(f"Waiting for weights from peers for round {round_num + 1} (Timeout: {weight_wait_timeout}s)...")
             enough_weights_received = False
@@ -209,7 +209,7 @@ def run_training_loop(config, global_model, servicer, registry_client, MY_ID, de
                     break
                 time.sleep(0.5)
                 
-            # E. Aggregazione (FedAvg)
+            # aggregate peers weights
             with servicer.lock:
                 round_payloads = servicer.received_weights.get(round_num, [])
 
@@ -231,25 +231,26 @@ def run_training_loop(config, global_model, servicer, registry_client, MY_ID, de
                     'num_samples': request.num_samples
                 })
             
-            # HASH PRIMA DI FEDAVG
+            # hash before FedAvg
             fc_hash_before = get_model_hash(global_model, only_trainable=True)
             print(f"VERIFICATION: BEFORE FEDAVG round {round_num + 1} Model Classifier SHA-256: {fc_hash_before}")
 
-            # Applicazione FedAvg
+            # apply FedAvg
             global_model = apply_fedavg(global_model, deserialized_models)
             
-            # Clear dei buffer del servicer
+            # clear servicer buffer
             with servicer.lock:
                 servicer.received_weights.pop(round_num, None)
 
-            # HASH DOPO FEDAVG
+            # hash after FedAvg
             fc_hash_after = get_model_hash(global_model, only_trainable=True)
             print(f"VERIFICATION: AFTER FEDAVG round {round_num + 1} Model Classifier SHA-256: {fc_hash_after}")
-
+            
+            # execution time for a single round
             comm_time = time.time() - start_comm
             print(f"Round {round_num}: Computing time = {compute_time:.2f}s, Network/Waiting time = {comm_time:.2f}s")
 
-            # tempi da stampare alla fine
+            # for final times print
             total_compute_time_acc += compute_time
             total_comm_time_acc += comm_time
             rounds_executed += 1
@@ -258,16 +259,14 @@ def run_training_loop(config, global_model, servicer, registry_client, MY_ID, de
         total_training_time = time.time() - start_training_time
         print(f"Total training time: {str(datetime.timedelta(seconds = total_training_time))}\n")
 
-        # Stampa delle medie
+        # display time averages for round
         if rounds_executed > 0:
             avg_compute = total_compute_time_acc / rounds_executed
             avg_comm = total_comm_time_acc / rounds_executed
             print(f"MEAN Computing time per round: {avg_compute:.2f}s")
             print(f"MEAN Network/Waiting time per round: {avg_comm:.2f}s")
 
-        # ==========================================
-        # VERIFICA DEGLI HASH FINALI
-        # ==========================================
+        # check relative model signature
         fc_hash_final = get_model_hash(global_model, only_trainable=True)
         full_hash_final = get_model_hash(global_model, only_trainable=False)
 
@@ -276,7 +275,7 @@ def run_training_loop(config, global_model, servicer, registry_client, MY_ID, de
         print(f"VERIFICATION: Final Model Full SHA-256:       {full_hash_final}")
         print("="*10 + "\n")
 
-        # Evaluation
+        # evaluation
         print("Final evaluation of globlal model on local test set...")
         try:
             SentimentPyTorch.evaluate_global(global_model, X_test, Mask_test, Y_test, device)
@@ -287,7 +286,7 @@ def run_training_loop(config, global_model, servicer, registry_client, MY_ID, de
         print(f"Error: Exception occurred during training loop: {e}")
 
 def main():
-    # 1. Lettura ENV
+    # read environment variables
     MY_ID = str(os.getenv("CLIENT_ID", f"node_{random.randint(1000,9999)}"))
     MY_IP = get_ecs_container_ip()
     MY_PORT = int(os.getenv("PORT", 50051))
@@ -295,24 +294,24 @@ def main():
     STARTER = os.getenv("STARTER", "false").lower() == "true"
     RESPAWNED = os.getenv("RESPAWNED", "false").lower() == "true"
     
-    # 2. Inizializzazione Server gRPC & Registry Client
+    # start gRPC server and registry client
     registry_client = RegistryClient(REGISTRY_ADDR, MY_ID)
     server, servicer = start_grpc_server(MY_PORT, MY_ID)
     registry_client.servicer = servicer
 
+    # important to check if we can use the gpu
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     torch.manual_seed(42)
     global_model = SentimentPyTorch(num_class=2).to(device)
 
     print(f"Init: Node ID: {MY_ID}, IP: {MY_IP}, PORT: {MY_PORT}, STARTER: {STARTER}, RESPAWNED: {RESPAWNED}")
 
-    # ==========================================
-    # REGISTRAZIONE DIVERSIFICATA (RESPAWNED vs NORMAL)
-    # ==========================================
+    # check if it is a normal or a respawned node with RESPAWNED
     initial_status = "working" if STARTER else "idle"
     
     is_starter_execution = STARTER
 
+    # in any case register the node to the peers list
     if not RESPAWNED:
         if not registry_client.register_node(MY_IP, MY_PORT, initial_status):
             print("Error connecting to Registry. Exiting.")
@@ -331,9 +330,9 @@ def main():
             config = None
             
             if is_starter_execution:
-                # Flusso STARTER
                 print("\nSTARTER Node. Discovery phase...")
                 
+                # get environment variables
                 training_nodes = int(os.getenv("TRAINING_NODES", 5))
                 total_rounds = int(os.getenv("TOTAL_ROUNDS", 5))
                 start_round = int(os.getenv("START_ROUND", 0))
@@ -343,6 +342,7 @@ def main():
                 training_set_percentage = float(os.getenv("TRAINING_SET_PERCENTAGE", 0.7))
                 num_epochs = int(os.getenv("NUM_EPOCHS", 1))
 
+                # get peers list
                 peers = []
                 retries = 0
                 while len(peers) < num_peers_required:
@@ -355,6 +355,7 @@ def main():
                         time.sleep(5)
                         retries += 1
                 
+                # if we have all the peers, give them the config and make them start
                 if len(peers) < num_peers_required:
                     print("Error: Unable to start training due to missing peers.")
                 else:
@@ -389,7 +390,7 @@ def main():
                 is_starter_execution = False
 
             else:
-                # Flusso SUPPORT NODE / IDLE
+                # for idle and support node, wait the timeout after a training
                 print("\nIDLE: Waiting for training requests (Timeout: 5 minutes)...")
                 servicer.start_training_event.clear()
                 
@@ -402,7 +403,7 @@ def main():
                 config = servicer.pending_training_config
                 registry_client.update_status("working")
 
-            # Esecuzione Training (passando la flag RESPAWNED)
+            # start training
             if config:
                 try:
                     run_training_loop(
@@ -411,18 +412,19 @@ def main():
                     print(f"Error during training execution: {e}")
                 RESPAWNED = False
 
-            # RESET DEL MODELLO GLOBALE PER NUOVE ESECUZIONI
+            # reset global model for new executions
             print("\nRestarting global model for future executions...")
             torch.manual_seed(42)
             global_model = SentimentPyTorch(num_class=2).to(device)
 
-            # Ripristino stato IDLE
+            # set up IDLE state
             print("\nRestoring status to IDLE for 5 minutes...")
             registry_client.update_status("idle")
 
     except KeyboardInterrupt:
         print("\nShutdown (KeyboardInterrupt).")
     finally:
+        # shutdown gRPC server
         print("Shutdown. Unregistering and stopping gRPC...")
         registry_client.unregister_node(MY_IP, MY_PORT)
         server.stop(grace=5)
