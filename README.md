@@ -35,16 +35,20 @@ Repositories:
 
 ### ECS
 
-Clusters:
-* federated_cluster (Fargate)
-* centralized-cluster (Fargate)
-
 Task Definitions:
 * client_task (ecr: federated/client)
 * client_task_centralized (ecr: federated/training-centralized)
 * coordinator_task (ecr: federated/training-centralized)
 * registry_server_task (ecr: federated/registry)
 * registry_server_task_centralized (ecr: federated/registry-centralized)
+
+Clusters:
+* federated_cluster (Fargate)
+* centralized-cluster (Fargate)
+
+Services:
+* registry-service (cluster: federated_cluster, task: registry_server_task)
+* centralized-registry-service (cluster: centralized-cluster, registry_server_task_centralized)
 
 ### Modifica parametri hardcoded
 
@@ -53,6 +57,11 @@ Sostituire in client/src/main.py la variabile bucket_name con il nome del vostro
 
 ## Esecuzione
 
-Per lanciare il sistema decentralizzato...
+Per lanciare il sistema decentralizzato andare in "federated_cluster" ed utilizzare "registry-service" per tenere attiva un istanza di "registry_server_task". Successivamente lanciare una "client_task" impostando in container ovverrides la variabile d'ambiente "STARTER = true". Modificando i seguenti parametri si può personalizzare il processo di addestramento:
 
-Per lanciare il sistema centralizzato...
+* NUM_EPOCS per cambiare il numero di epoche in un round.
+* TOTAL_ROUNDS per il numero di round. Alla fine di ogni round avverrà lo scambio dei pesi. Concluso l'ultimo round l'addestramento termina.
+* TRAINING_NODES per il numero di nodi coinvolti nell' addestramento.
+* NUM_PEERS_REQUIRED numero minimo di pesi provenienti da altri nodi nodi che un client deve ricevere necessari per terminare il round. Dovrebbe essere impostato a TRAINING_NODES - 1.
+
+Per il sistema centralizzato il procedimento è analogo. Utilizzare il servizio "centralized-registry-service" in "centralized-cluster" per tenere attiva un'istanza di "registry_server_task_centralized". Infine lanciare una "client_task_centralized" con le variabili d'ambiente desiderate ("STARTER = true" obbligatorio).
