@@ -57,7 +57,7 @@ Sostituire in client/src/main.py la variabile bucket_name con il nome del vostro
 
 ## Esecuzione
 
-Per lanciare il sistema decentralizzato andare in "federated_cluster" ed utilizzare "registry-service" per tenere attiva un istanza di "registry_server_task". Successivamente lanciare una "client_task" impostando in container ovverrides la variabile d'ambiente "STARTER = true". Modificando i seguenti parametri si può personalizzare il processo di addestramento:
+Per lanciare il sistema decentralizzato andare in "federated_cluster" ed utilizzare "registry-service" per tenere attiva un istanza di "registry_server_task". Successivamente lanciare una "client_task" impostando in container overrides la variabile d'ambiente "STARTER = true". Modificando i seguenti parametri si può personalizzare il processo di addestramento:
 
 * NUM_EPOCS per cambiare il numero di epoche in un round.
 * TOTAL_ROUNDS per il numero di round. Alla fine di ogni round avverrà lo scambio dei pesi. Concluso l'ultimo round l'addestramento termina.
