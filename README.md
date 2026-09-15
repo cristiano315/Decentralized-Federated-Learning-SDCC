@@ -64,4 +64,4 @@ Per lanciare il sistema decentralizzato andare in "federated_cluster" ed utilizz
 * TRAINING_NODES per il numero di nodi coinvolti nell' addestramento.
 * NUM_PEERS_REQUIRED numero minimo di pesi provenienti da altri nodi nodi che un client deve ricevere necessari per terminare il round. Dovrebbe essere impostato a TRAINING_NODES - 1.
 
-Per il sistema centralizzato il procedimento è analogo. Utilizzare il servizio "centralized-registry-service" in "centralized-cluster" per tenere attiva un'istanza di "registry_server_task_centralized". Infine lanciare una "client_task_centralized" con le variabili d'ambiente desiderate ("STARTER = true" obbligatorio).
+Per il sistema centralizzato il procedimento è analogo. Utilizzare il servizio "centralized-registry-service" in "centralized-cluster" per tenere attiva un'istanza di "registry_server_task_centralized". Infine lanciare una "coordinator_task" con le variabili d'ambiente desiderate ("STARTER = true" obbligatorio).
