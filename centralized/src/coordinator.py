@@ -1,4 +1,5 @@
 import os
+import random
 import time
 import threading
 import torch
@@ -6,7 +7,7 @@ import grpc
 from concurrent import futures
 
 from utils import load_weights_from_bytes, get_weights_as_bytes, get_model_hash, get_ecs_container_ip, get_training_index_list
-from rpc_calls import FederatedServerServicer, RegistryClient
+from rpc_calls import FederatedServerServicer, RegistryClient, ping_worker_node
 from model import SentimentPyTorch
 from aggregator import apply_fedavg
 
@@ -20,27 +21,31 @@ class FederatedCoordinator:
         self.config = config
         self.device = device
         self.registry_client = None
+        self.active_nodes = []
+        self.indexes = {}
+        self.global_model = None
 
-    def broadcast_start_signal(self, nodes, indexes):
+    def send_start_to_single_node(self, node, current_round):
+        """Send the training configuration and indices to a single node."""
+        current_index = self.indexes[node['id']]
+        current_config = {
+            'aggregator_address': self.config['aggregator_address'],
+            'total_rounds': self.config['total_rounds'],
+            'start_round': current_round,
+            'start_index': current_index['start_idx'],
+            'weight_wait_timeout_seconds': self.config['timeout_sec'],
+            'training_set_percentage': self.config['training_set_percentage'],
+            'num_epochs': self.config['num_epochs'],
+            'num_samples': current_index['num_samples'],
+            'truncated_training_length': current_index['truncated_training_length']
+        }
+        return self.servicer.send_start_training_signal(node, current_config)
+
+    def broadcast_start_signal(self, nodes, current_round = 0):
         """Send start signal to all nodes in parallel."""
         threads = []
         for node in nodes:
-            current_index = indexes[node['id']]
-            current_config = {
-                'aggregator_address': self.config['aggregator_address'],
-                'total_rounds': self.config['total_rounds'],
-                'start_round': self.config['start_round'],
-                'start_index': current_index['start_idx'],
-                'weight_wait_timeout_seconds': self.config['timeout_sec'],
-                'training_set_percentage': self.config['training_set_percentage'],
-                'num_epochs': self.config['num_epochs'],
-                'num_samples' : current_index['num_samples'],
-                'truncated_training_length' : current_index['truncated_training_length']
-            }
-            t = threading.Thread(
-                target=self.servicer.send_start_training_signal, 
-                args=(node, current_config)
-            )
+            t = threading.Thread(target=self.send_start_to_single_node, args=(node, current_round))
             threads.append(t)
             t.start()
         for t in threads:
@@ -100,19 +105,22 @@ class FederatedCoordinator:
             print("Error: Unable to start training due to insufficient peers.")
             return
 
-        print(f"Nodes recruited for training: {active_nodes}")
+        self.active_nodes = active_nodes
+        print(f"Nodes recruited for training: {self.active_nodes}")
 
         # Send Start Training Signal to models and initialize the global model
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         torch.manual_seed(42)
-        global_model = SentimentPyTorch(num_class=2).to(device)
+        self.global_model = SentimentPyTorch(num_class=2).to(device)
         print("Sending StartTraining signal to all nodes...")
-        indexes = get_training_index_list(active_nodes, bucket_name, s3_key, self.config['training_set_percentage'], max_samples_per_client=1000)
-        self.broadcast_start_signal(active_nodes, indexes)
+        self.indexes = get_training_index_list(self.active_nodes, bucket_name, s3_key, self.config['training_set_percentage'], max_samples_per_client=1000)
+        self.servicer.coordinator = self
+        self.broadcast_start_signal(self.active_nodes, current_round = 0)
 
         total_rounds = self.config['total_rounds']
         weight_timeout = self.config['timeout_sec']
         min_clients = self.config.get('min_clients', 1)
+        expected_node_count = len(self.active_nodes)
 
         # Training loop
         for round_num in range(total_rounds):
@@ -129,16 +137,53 @@ class FederatedCoordinator:
                     received_count = len(self.servicer.received_weights.get(round_num, []))
                 
                 # IF all nodes have sent their weights, break the loop
-                if received_count >= len(active_nodes):
-                    print(f"Weights received from all nodes ({received_count}/{len(active_nodes)}).")
+                if received_count >= len(self.active_nodes):
+                    print(f"Weights received from all nodes ({received_count}/{len(self.active_nodes)}).")
                     break
                 
                 # Handling Timeout
                 if time.time() - start_wait_time > weight_timeout:
-                    print(f"Timeout reached for Round {round_num + 1}. Weights received from {received_count}/{len(active_nodes)} nodes.")
+                    print(f"Timeout reached for Round {round_num + 1}. Weights received from {received_count}/{len(self.active_nodes)} nodes.")
                     break
                 
                 time.sleep(1)
+
+            # Fault tolerance
+            with self.servicer.lock:
+                round_payloads = self.servicer.received_weights.get(round_num, [])
+                received_ids = {req.sender_id for req in round_payloads}
+
+            missing_nodes = [node for node in self.active_nodes if node['id'] not in received_ids]
+            coord_ip, coord_port = self.config['aggregator_address'].split(':')
+
+            dead_count = 0
+
+            for dead_candidate in missing_nodes:
+                print(f"Node {dead_candidate['id']} did not respond. Executing direct ping...")
+                is_alive = ping_worker_node(dead_candidate)
+                if not is_alive:
+                    print(f"Node {dead_candidate['id']} confirmed DEAD. Reporting to Registry...")
+                    # Remove from active nodes
+                    self.active_nodes = [n for n in self.active_nodes if n['id'] != dead_candidate['id']]
+                    dead_count += 1
+
+                    # Signal to the registry to start a replacement container        
+                    self.registry_client.signal_unresponsive_node(
+                        peer_ip=dead_candidate['ip'],
+                        peer_port=dead_candidate['port'],
+                        peer_id=dead_candidate['id'],
+                        requiredNodes=self.config['training_nodes'],
+                        totalRounds=total_rounds,
+                        startRound=round_num,
+                        maxDiscoveryRetries=5,
+                        weightWaitTimeoutSeconds=weight_timeout,
+                        trainingSetPercentage=self.config['training_set_percentage'],
+                        numEpochs=self.config['num_epochs'],
+                        coordinator_ip=coord_ip,
+                        coordinator_port=int(coord_port)
+                    )
+                else:
+                    print(f"Node {dead_candidate['id']} is still alive (likely local latency).")
 
             # Deserialization and FedAvg
             with self.servicer.lock:
@@ -146,42 +191,60 @@ class FederatedCoordinator:
 
             print(f"Executing FedAvg on {len(round_payloads)} contributions...")
 
-            round_payloads.sort(key=lambda x: x.sender_id)
-            deserialized_models = []
+            if not round_payloads:
+                print(f"Warning: No contributions received for Round {round_num + 1}. Skipping FedAvg and keeping current global model.")
+            else:
+                round_payloads.sort(key=lambda x: x.sender_id)
+                deserialized_models = []
+                
+                for request in round_payloads:
+                    state_dict = load_weights_from_bytes(request.model_weights)
+                    deserialized_models.append({
+                        'sender_id': request.sender_id,
+                        'weights': state_dict,
+                        'num_samples': request.num_samples
+                    })
             
-            for request in round_payloads:
-                state_dict = load_weights_from_bytes(request.model_weights)
-                deserialized_models.append({
-                    'sender_id': request.sender_id,
-                    'weights': state_dict,
-                    'num_samples': request.num_samples
-                })
-            
-            # HASH BEFORE FEDAVG
-            fc_hash_before = get_model_hash(global_model, only_trainable=True)
-            print(f"VERIFICATION: BEFORE FEDAVG round {round_num + 1} Model Classifier SHA-256: {fc_hash_before}")
+                # HASH BEFORE FEDAVG
+                fc_hash_before = get_model_hash(self.global_model, only_trainable=True)
+                print(f"VERIFICATION: BEFORE FEDAVG round {round_num + 1} Model Classifier SHA-256: {fc_hash_before}")
 
-            global_model = apply_fedavg(global_model, deserialized_models)
-            
+                self.global_model = apply_fedavg(self.global_model, deserialized_models)
+                
+                # Clear servicer buffer
+                with self.servicer.lock:
+                    self.servicer.received_weights.pop(round_num, None)
+
+                # HASH AFTER FEDAVG
+                fc_hash_after = get_model_hash(self.global_model, only_trainable=True)
+                print(f"VERIFICATION: AFTER FEDAVG round {round_num + 1} Model Classifier SHA-256: {fc_hash_after}")
+
             # Clear servicer buffer
             with self.servicer.lock:
                 self.servicer.received_weights.pop(round_num, None)
 
-            # HASH AFTER FEDAVG
-            fc_hash_after = get_model_hash(global_model, only_trainable=True)
-            print(f"VERIFICATION: AFTER FEDAVG round {round_num + 1} Model Classifier SHA-256: {fc_hash_after}")
-
             # Load local model for verification
-            global_bytes = get_weights_as_bytes(global_model)
+            global_bytes = get_weights_as_bytes(self.global_model)
             
             with self.servicer.lock:
                 self.servicer.latest_global_bytes = global_bytes
+                self.servicer.received_weights.pop(round_num, None)
 
             print(f"Round {round_num + 1} completed.")
 
+            # Wait for nodes to respawn
+            if len(self.active_nodes) < expected_node_count:
+                print(f"\nWaiting for respawned nodes ({len(self.active_nodes)}/{expected_node_count} ready)...")
+                while len(self.active_nodes) < expected_node_count:
+                    self.servicer.node_respawned_event.wait(timeout=120)
+                    self.servicer.node_respawned_event.clear()
+                    print(f"Actual nodes state: {len(self.active_nodes)}/{expected_node_count}")
+
+                print(f"All the {expected_node_count} nodes are ready and configured.\n")
+
             # Broadcast new model to workers
             print(f"Sending updated global model to all nodes for Round {round_num + 1}...")
-            self.broadcast_global_model(active_nodes, global_bytes, round_num)
+            self.broadcast_global_model(self.active_nodes, global_bytes, round_num)
 
         print("\n" + "="*40)
         print("  FEDERATED TRAINING COMPLETED SUCCESSFULLY  ")
@@ -233,7 +296,7 @@ def main():
         config=training_config,
         device=device
     )
-    registry_client = RegistryClient(REGISTRY_ADDR, '1')
+    registry_client = RegistryClient(REGISTRY_ADDR, f"{random.randint(1000, 9999)}")
     coordinator.registry_client = registry_client
 
     try:

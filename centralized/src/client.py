@@ -78,7 +78,7 @@ def run_training_loop(config, global_model, servicer, MY_ID, device, RESPAWNED):
 
         # set model state
         current_weights = load_weights_from_bytes(current_model)
-        global_model.load_state_dict(current_weights)
+        global_model.load_state_dict(current_weights, strict=False)
         servicer.received_weights.clear()
         
         # skip current round since we just recovered it

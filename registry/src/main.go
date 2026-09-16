@@ -39,6 +39,9 @@ type registryServer struct {
 	// Avoids spawning multiple nodes with the same ID in case of respawn
 	respawningNodes map[string]bool
 
+	// Track nodes that have completed their tasks and unregistered gracefully
+	completedNodes  map[string]bool
+
 	cond *sync.Cond
 
 	currentClientID int
@@ -346,6 +349,7 @@ func (s *registryServer) UnregisterNode(ctx context.Context, req *pb.NodeInfo) (
 
 	// Remove the node from the memory
 	delete(s.nodes, req.NodeId)
+	s.completedNodes[req.NodeId] = true
 
 	// Remove the node from dynamoDB and destroy it.
 	err := utils.RemoveNode(req.NodeId)
@@ -367,11 +371,19 @@ func (s *registryServer) UnregisterNode(ctx context.Context, req *pb.NodeInfo) (
 func (s *registryServer) SignalUnresponsiveNode(ctx context.Context, req *pb.FullNodeInfo) (*pb.Ack, error) {
 	s.mu.Lock()
 
-	// Deduping
-	_, existsInMap := s.nodes[req.NodeId]
-	alreadyRespawning := s.respawningNodes[req.NodeId]
+	// Avoid recreating if node finished training and unregistered gracefully
+	if s.completedNodes[req.NodeId] {
+		s.mu.Unlock()
+		log.Printf("Node %s has already completed and unregistered gracefully. Ignoring.", req.NodeId)
+		return &pb.Ack{
+			Success: true,
+			Message: fmt.Sprintf("Node %s has already completed.", req.NodeId),
+		}, nil
+	}
 
-	if !existsInMap || alreadyRespawning {
+	// Deduping
+	nodeInfo, existsInMap := s.nodes[req.NodeId]
+	if !existsInMap || s.respawningNodes[req.NodeId] {
 		s.mu.Unlock()
 		log.Printf("Node %s already processed or being respawned. Ignoring duplicate signal.", req.NodeId)
 		return &pb.Ack{
@@ -380,8 +392,33 @@ func (s *registryServer) SignalUnresponsiveNode(ctx context.Context, req *pb.Ful
 		}, nil
 	}
 
-	// Mark the node as respawning and remove it from the active nodes
 	s.respawningNodes[req.NodeId] = true
+	s.mu.Unlock()
+
+	// Ping the node
+	log.Printf("Peer signaled %s as unresponsive. Registry is verifying with a direct ping...", req.NodeId)
+	targetNode := &pb.NodeInfo{
+		NodeId:    req.NodeId,
+		IpAddress: req.IpAddress,
+		Port:      req.Port,
+		Status:    nodeInfo.Status,
+	}
+
+	isAlive := pingNode(targetNode)
+
+	s.mu.Lock()
+	if isAlive {
+		// Stop respawn and remove from respawningNodes
+		delete(s.respawningNodes, req.NodeId)
+		s.mu.Unlock()
+		log.Printf("Node %s is actually ALIVE. False alarm, skipping respawn.", req.NodeId)
+		return &pb.Ack{
+			Success: false,
+			Message: fmt.Sprintf("Node %s is alive and reachable by registry. Respawn aborted.", req.NodeId),
+		}, nil
+	}
+
+	// Node is confirmed unresponsive, proceed with respawn
 	delete(s.nodes, req.NodeId)
 	s.pendingNodes++
 	s.cond.Broadcast()
@@ -543,6 +580,7 @@ func signalNewNode(oldNode *pb.NodeInfo, newNode *pb.NodeInfo) bool {
 
 	resp, err := client.NotifyUnresponsiveNode(ctx, req)
 	if err != nil {
+		log.Printf("Error notifying unresponsive node %s: %v", address, err)
 		return false
 	}
 
@@ -569,6 +607,7 @@ func main() {
 	myServer := &registryServer{
 		nodes:           make(map[string]*pb.NodeInfo),
 		respawningNodes: make(map[string]bool),
+		completedNodes: make(map[string]bool),
 		currentClientID: 1,
 	}
 	myServer.cond = sync.NewCond(&myServer.mu)

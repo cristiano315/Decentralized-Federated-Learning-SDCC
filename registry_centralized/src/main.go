@@ -24,6 +24,11 @@ import (
 // SERVER STRUCT
 // =====================================================================
 
+type CoordinatorCallback struct {
+	IP   string
+	Port int
+}
+
 // registryServer implements the RegistryService defined in the .proto file.
 type registryServer struct {
 	// Embedding this is required by gRPC for forward compatibility
@@ -38,6 +43,11 @@ type registryServer struct {
 
 	// Avoids spawning multiple nodes with the same ID in case of respawn
 	respawningNodes map[string]bool
+	
+	// Track nodes that have completed their tasks and unregistered gracefully
+	completedNodes  map[string]bool
+
+	coordinatorCallbacks map[string]CoordinatorCallback
 
 	cond *sync.Cond
 
@@ -110,12 +120,10 @@ func (s *registryServer) RegisterRespawnedNode(ctx context.Context, req *pb.Node
 	}
 	s.cond.Broadcast()
 
-	// Snapshot existing peers
-	existingPeers := make([]*pb.NodeInfo, 0, len(s.nodes)-1)
-	for id, n := range s.nodes {
-		if id != req.NodeId {
-			existingPeers = append(existingPeers, n)
-		}
+	// Get coordinator
+	cb, hasCoordinator := s.coordinatorCallbacks[req.NodeId]
+	if hasCoordinator {
+		delete(s.coordinatorCallbacks, req.NodeId) // Consuma il callback
 	}
 	s.mu.Unlock()
 
@@ -126,19 +134,31 @@ func (s *registryServer) RegisterRespawnedNode(ctx context.Context, req *pb.Node
 
 	log.Printf("Node joined: %s at %s:%d", req.NodeId, req.IpAddress, req.Port)
 
-	// Notify all existing peers about the new node in parallel
-	var wg sync.WaitGroup
-	for _, peer := range existingPeers {
-		wg.Add(1)
-		go func(p *pb.NodeInfo) {
-			defer wg.Done()
-			signalNewNode(p, req)
-		}(peer)
+	// Notify the coordinator
+	if hasCoordinator {
+		go func(coordIP string, coordPort int, respawned *pb.NodeInfo) {
+			coordAddress := fmt.Sprintf("%s:%d", coordIP, coordPort)
+			log.Printf("Notifying coordinator at %s of node respawn %s...", coordAddress, respawned.NodeId)
+
+			conn, err := grpc.NewClient(coordAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
+			if err != nil {
+				log.Printf("Error connecting gRPC to coordinator %s: %v", coordAddress, err)
+				return
+			}
+			defer conn.Close()
+
+			client := pb.NewFederatedServerClient(conn)
+			ctxTimeout, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+
+			_, err = client.NotifyUnresponsiveNode(ctxTimeout, respawned)
+			if err != nil {
+				log.Printf("Error calling NotifyUnresponsiveNode on coordinator %s: %v", coordAddress, err)
+			} else {
+				log.Printf("Coordinator %s notified successfully for node %s.", coordAddress, respawned.NodeId)
+			}
+		}(cb.IP, cb.Port, req)
 	}
-	// Don't block the response, let the notifications happen in the background
-	go func() {
-		wg.Wait()
-	}()
 
 	return &pb.RegisterResponse{
 		Success: true,
@@ -346,6 +366,7 @@ func (s *registryServer) UnregisterNode(ctx context.Context, req *pb.NodeInfo) (
 
 	// Remove the node from the in-memory map
 	delete(s.nodes, req.NodeId)
+	s.completedNodes[req.NodeId] = true
 
 	// Remove the node from dynamoDB and destroy it.
 	err := utils.RemoveNode(req.NodeId)
@@ -364,14 +385,22 @@ func (s *registryServer) UnregisterNode(ctx context.Context, req *pb.NodeInfo) (
 }
 
 // SignalUnresponsiveNode allows nodes to signal the registry that a peer is unresponsive.
-func (s *registryServer) SignalUnresponsiveNode(ctx context.Context, req *pb.FullNodeInfo) (*pb.Ack, error) {
+func (s *registryServer) SignalUnresponsiveNodeCoordinator(ctx context.Context, req *pb.DeadNodeInfo) (*pb.Ack, error) {
 	s.mu.Lock()
 
-	// Deduping
-	_, existsInMap := s.nodes[req.NodeId]
-	alreadyRespawning := s.respawningNodes[req.NodeId]
+	// Avoid recreating if node finished training and unregistered gracefully
+	if s.completedNodes[req.NodeId] {
+		s.mu.Unlock()
+		log.Printf("Node %s has already completed and unregistered gracefully. Ignoring.", req.NodeId)
+		return &pb.Ack{
+			Success: true,
+			Message: fmt.Sprintf("Node %s has already completed.", req.NodeId),
+		}, nil
+	}
 
-	if !existsInMap || alreadyRespawning {
+	// Deduping
+	nodeInfo, existsInMap := s.nodes[req.NodeId]
+	if !existsInMap || s.respawningNodes[req.NodeId] {
 		s.mu.Unlock()
 		log.Printf("Node %s already processed or being respawned. Ignoring duplicate signal.", req.NodeId)
 		return &pb.Ack{
@@ -380,17 +409,51 @@ func (s *registryServer) SignalUnresponsiveNode(ctx context.Context, req *pb.Ful
 		}, nil
 	}
 
-	// Mark the node as respawning and remove it from the active nodes
 	s.respawningNodes[req.NodeId] = true
+	s.mu.Unlock()
+
+	// Ping the node
+	log.Printf("Peer signaled %s as unresponsive. Registry is verifying with a direct ping...", req.NodeId)
+	targetNode := &pb.NodeInfo{
+		NodeId:    req.NodeId,
+		IpAddress: req.IpAddress,
+		Port:      req.Port,
+		Status:    nodeInfo.Status,
+	}
+
+	isAlive := pingNode(targetNode)
+
+	s.mu.Lock()
+	if isAlive {
+		// Stop respawn and remove from respawningNodes
+		delete(s.respawningNodes, req.NodeId)
+		s.mu.Unlock()
+		log.Printf("Node %s is actually ALIVE. False alarm, skipping respawn.", req.NodeId)
+		return &pb.Ack{
+			Success: false,
+			Message: fmt.Sprintf("Node %s is alive and reachable by registry. Respawn aborted.", req.NodeId),
+		}, nil
+	}
+
+	// Node is confirmed unresponsive, proceed with respawn
 	delete(s.nodes, req.NodeId)
 	s.pendingNodes++
+
+	if req.CoordinatorIp != "" && req.CoordinatorPort != 0 {
+		s.coordinatorCallbacks[req.NodeId] = CoordinatorCallback{
+			IP:   req.CoordinatorIp,
+			Port: int(req.CoordinatorPort),
+		}
+		log.Printf("Associato coordinatore %s:%d al worker %s in attesa di respawn", req.CoordinatorIp, req.CoordinatorPort, req.NodeId)
+	}
+
 	s.cond.Broadcast()
 	s.mu.Unlock()
 
 	// Remove the node from dynamoDB
 	err := utils.RemoveNode(req.NodeId)
 	if err != nil {
-		log.Printf("Error removing node %s from DynamoDB: %v", req.NodeId, err)
+		log.Printf("Error: Failed to remove node %s from DynamoDB: %v", req.NodeId, err)
 	} else {
 		log.Printf("Node %s removed from DynamoDB.", req.NodeId)
 	}
@@ -540,6 +603,7 @@ func signalNewNode(oldNode *pb.NodeInfo, newNode *pb.NodeInfo) bool {
 
 	resp, err := client.NotifyUnresponsiveNode(ctx, req)
 	if err != nil {
+		log.Printf("Error notifying unresponsive node %s: %v", address, err)
 		return false
 	}
 
@@ -566,6 +630,8 @@ func main() {
 	myServer := &registryServer{
 		nodes:           make(map[string]*pb.NodeInfo),
 		respawningNodes: make(map[string]bool),
+		completedNodes: make(map[string]bool),
+		coordinatorCallbacks: make(map[string]CoordinatorCallback),
 		currentClientID: 1,
 	}
 	myServer.cond = sync.NewCond(&myServer.mu)

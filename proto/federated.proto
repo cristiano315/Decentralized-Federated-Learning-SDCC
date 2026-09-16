@@ -20,6 +20,8 @@ service RegistryService {
     rpc UnregisterNode (NodeInfo) returns (Ack);
     // Signal to the registry that a node is unresponsive
     rpc SignalUnresponsiveNode (FullNodeInfo) returns (Ack);
+    // Signal to the registry that a node is unresponsive, from the coordinator
+    rpc SignalUnresponsiveNodeCoordinator (DeadNodeInfo) returns (Ack);
     // Request to change node status
     rpc ChangeNodeStatus (ChangeStatusRequest) returns (Ack);
 }
@@ -58,6 +60,9 @@ service FederatedServer {
     
     // A client requests the updated global model from the server
     rpc GetGlobalModel (GlobalModelRequest) returns (WeightPayload);
+
+    // A registry node can notify other nodes that a node is unresponsive
+    rpc NotifyUnresponsiveNode (NodeInfo) returns (Ack);
 }
 
 // ===============================================================
@@ -84,6 +89,22 @@ message FullNodeInfo {
     int32 weight_wait_timeout_seconds = 8; // Timeout in seconds for waiting for weights from peers
     float training_set_percentage = 9; // Percentage data for training, as a number from 0 to 1
     int32 num_epochs = 10; //number of epochs in a round
+}
+
+// Node info for fault recovery, sent from the coordinator to the registry
+message DeadNodeInfo {
+    string node_id = 1; // Unique identifier for the node
+    string ip_address = 2; // IP address of the node
+    int32 port = 3; // Port number for communication
+    int32 current_round = 4; // Last training round completed by the node
+    int32 required_nodes = 5; // Number of nodes required for the training
+    int32 total_rounds = 6; // Total number of training rounds
+    int32 max_discovery_retries = 7; // Maximum number of retries for node discovery
+    int32 weight_wait_timeout_seconds = 8; // Timeout in seconds for waiting for weights from peers
+    float training_set_percentage = 9; // Percentage data for training, as a number from 0 to 1
+    int32 num_epochs = 10; //number of epochs in a round
+    string coordinator_ip = 11;
+    int32 coordinator_port = 12;
 }
 
 // Response for registration

@@ -1,6 +1,7 @@
 #File for grpc calls implementation
 
 import threading
+import copy
 
 import grpc
 import federated_pb2 as federated_pb2
@@ -26,6 +27,8 @@ class FederatedNodeServicer(federated_pb2_grpc.FederatedNodeServicer):
         self.round_num = 0 # set up every after every local_train in main.py
         self.start_training_event = threading.Event()
         self.pending_training_config = None
+        self.is_starter = False
+        self.active_config = None
 
     def StartTraining(self, request, context):
         """
@@ -170,12 +173,47 @@ class FederatedNodeServicer(federated_pb2_grpc.FederatedNodeServicer):
             print(f"Failed to request weights from {peer_address}: {e.code()}")
             return None
 
-    def ping(self, request, context):
+    def Ping(self, request, context):
         """
         RPC method to respond to ping requests from the registry.
         """
         if request.node_id == self.my_id:
             return federated_pb2.Ack(success=True, message="Node is alive")
+
+    def NotifyUnresponsiveNode(self, request, context):
+        """
+        RPC method to handle notifications about unresponsive nodes from the registry.
+        """
+
+        new_peer = {
+            "id": request.node_id,
+            "ip": request.ip_address,
+            "port": request.port
+        }
+
+        self.add_or_update_peer(new_peer)
+        print(f"Peer {request.node_id} marked as unresponsive. Updated local peer list.")
+
+        # If STARTER node, send config
+        if self.is_starter and self.active_config is not None:
+            print(f"Sending configuration to respawned node {request.node_id}...")
+
+            with self.lock:
+                peers_snapshot = list(self.peers)
+
+            # Send config in a separate thread to avoid blocking the gRPC server
+            def push_config_to_respawned():
+                config_to_send = copy.deepcopy(self.active_config)
+                # Exclude receiver
+                config_to_send['peers'] = [p for p in peers_snapshot if p['id'] != request.node_id]
+
+                # Send start training signal
+                self.send_start_training_signal(new_peer, config_to_send)
+
+            threading.Thread(target=push_config_to_respawned, daemon=True).start()
+
+
+        return federated_pb2.Ack(success=True, message=f"Peer {request.node_id} removed from local topology.")
 
     def send_start_training_signal(self, peer, config):
         try:
@@ -312,19 +350,6 @@ class RegistryClient:
         except grpc.RpcError as e:
             print(f"Error: Discovery failed: {e.details()}")
             return []
-
-    def NotifyUnresponsiveNode(self, request, context):
-        """
-        RPC method to handle notifications about unresponsive nodes from the registry.
-        """
-        # If the servicer is connected, update the local peer list to remove the unresponsive node
-        if self.servicer is not None:
-            self.servicer.add_or_update_peer({"id": request.node_id, "ip": request.ip_address, "port": request.port})
-            print(f"Peer {request.node_id} marked as unresponsive. Updated local peer list.")
-        else:
-            print("Warning: Servicer not connected to RegistryClient, unable to update peer list.")
-
-        return federated_pb2.Ack(success=True, message=f"Peer {request.node_id} removed from local topology.")
         
     def unregister_node(self, my_ip: str, my_port: int) -> bool:
         """

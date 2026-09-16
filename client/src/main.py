@@ -168,6 +168,7 @@ def run_training_loop(config, global_model, servicer, registry_client, MY_ID, de
             servicer.seen_messages.add((MY_ID, round_num))
             
             # send weights to other peer with gossiping
+            peers = servicer.peers
             actual_k = min(k, len(peers))
             initial_gossip_peers = random.sample(peers, actual_k)
             
@@ -297,6 +298,7 @@ def main():
     registry_client = RegistryClient(REGISTRY_ADDR, MY_ID)
     server, servicer = start_grpc_server(MY_PORT, MY_ID)
     registry_client.servicer = servicer
+    servicer.is_starter = STARTER
 
     # important to check if we can use the gpu
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -381,6 +383,7 @@ def main():
                         'num_epochs': num_epochs,
                         'peers': [*peers, starter_peer]  # Include the starter node itself in the peers list
                     }
+                    servicer.active_config = peers_config
                     
                     print("STARTER Node. Sending RPC StartTraining to peers...")
                     for peer in peers:

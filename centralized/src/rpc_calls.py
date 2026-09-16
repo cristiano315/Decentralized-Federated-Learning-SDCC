@@ -1,6 +1,8 @@
 #File for grpc calls implementation
 
 import threading
+import copy
+import time
 
 import grpc
 import federated_pb2 as federated_pb2
@@ -79,12 +81,11 @@ class FederatedNodeServicer(federated_pb2_grpc.FederatedNodeServicer):
             num_samples=self.num_samples
         )
 
-    def ping(self, request, context):
+    def Ping(self, request, context):
         """
         RPC method to respond to ping requests from the registry.
         """
-        if request.node_id == self.my_id:
-            return federated_pb2.Ack(success=True, message="Node is alive")
+        return federated_pb2.Ack(success=True, message="Node is alive")
 
 
 
@@ -124,7 +125,9 @@ class FederatedServerServicer(federated_pb2_grpc.FederatedServerServicer):
         self.num_samples = 0 # set up after defining servicer in main.py
         self.round_num = 0 # set up every after every local_train in main.py
         self.start_training_event = threading.Event()
-        self.pending_training_config = None
+        self.pending_training_config = None,
+        self.coordinator = None
+        self.node_respawned_event = threading.Event()
     
     def get_weights_from_peer(self, peer_ip: str, peer_port: int, peer_id: str, my_id: str, round_number_requested: int):
         """
@@ -234,6 +237,54 @@ class FederatedServerServicer(federated_pb2_grpc.FederatedServerServicer):
                 model_weights=self.latest_local_weights,
                 num_samples=self.num_samples
             )
+
+    def NotifyUnresponsiveNode(self, request, context):
+        """
+        Called by the registry to notify the coordinator that a node has respawned after a crash.
+        """
+
+        respawned_id = request.node_id
+
+        if not self.coordinator or respawned_id not in self.coordinator.indexes:
+            return federated_pb2.Ack(
+                success=True, 
+                message=f"Node {respawned_id} does not belong to this coordinator. Ignored."
+            )
+
+        print(f"Received respawn notification for node {request.node_id} ({request.ip_address}:{request.port})")
+
+        new_node = {
+            'id': respawned_id,
+            'ip': request.ip_address,
+            'port': request.port
+        }
+
+        with self.lock:
+            self.coordinator.active_nodes = [n for n in self.coordinator.active_nodes if n['id'] != respawned_id]
+            self.coordinator.active_nodes.append(new_node)
+            print(f"[{self.my_id}] Node {respawned_id} restored. Active nodes: {len(self.coordinator.active_nodes)}")
+            
+            # Signal
+            self.node_respawned_event.set()
+
+            # Send startTraining and config
+            def bootstrap_respawned_node():
+                time.sleep(1)
+                curr_round = self.current_round
+                print(f"Sending start training signal to {new_node['id']} to resume from round {curr_round}...")
+                self.coordinator.send_start_to_single_node(new_node, current_round=curr_round)
+
+                # Send latest global model
+                with self.lock:
+                    model_bytes = self.latest_local_weights
+
+                if model_bytes:
+                    print(f"Sending current global model to {new_node['id']}...")
+                    self.coordinator.send_global_model_to_node(new_node, model_bytes)
+
+            threading.Thread(target=bootstrap_respawned_node, daemon=True).start()
+
+        return federated_pb2.Ack(success=True, message=f"Coordinator updated with respawned node {request.node_id}")
 
 # =====================================================================
 # REGISTRY CALLS
@@ -355,7 +406,7 @@ class RegistryClient:
             print(f"Error: Failed to unregister: {e.details()}")
             return False
 
-    def signal_unresponsive_node(self, peer_ip: str, peer_port: int, peer_id: str, requiredNodes: int, totalRounds: int, startRound: int, maxDiscoveryRetries: int, weightWaitTimeoutSeconds: int, trainingSetPercentage: float, numEpochs: int):
+    def signal_unresponsive_node(self, peer_ip: str, peer_port: int, peer_id: str, requiredNodes: int, totalRounds: int, startRound: int, maxDiscoveryRetries: int, weightWaitTimeoutSeconds: int, trainingSetPercentage: float, numEpochs: int, coordinator_ip: str = "", coordinator_port: int = 0):
         """
         Signals to the registry that a peer node is unresponsive.
         """
@@ -365,7 +416,7 @@ class RegistryClient:
                 target = f"dns:///{target}"
             with grpc.insecure_channel(target) as channel:
                 stub = federated_pb2_grpc.RegistryServiceStub(channel)
-                payload = federated_pb2.FullNodeInfo(
+                payload = federated_pb2.DeadNodeInfo(
                     node_id=peer_id,
                     ip_address=str(peer_ip),
                     port=int(peer_port),
@@ -375,9 +426,11 @@ class RegistryClient:
                     max_discovery_retries=maxDiscoveryRetries,
                     weight_wait_timeout_seconds=weightWaitTimeoutSeconds,
                     training_set_percentage=trainingSetPercentage,
-                    num_epochs=numEpochs
+                    num_epochs=numEpochs,
+                    coordinator_ip=coordinator_ip,
+                    coordinator_port=coordinator_port
                 )
-                response = stub.SignalUnresponsiveNode(payload)
+                response = stub.SignalUnresponsiveNodeCoordinator(payload)
                 print(f"Signal unresponsive node success: {response.message}")
                 return response.success
         except grpc.RpcError as e:
@@ -414,3 +467,17 @@ class RegistryClient:
         except Exception as e:
             print(f"Error: Generic exception during update_status: {e}")
             return False
+
+def ping_worker_node(node):
+    """Ping a worker node via gRPC."""
+    for attempt in range(2):
+        try:
+            address = f"{node['ip']}:{node['port']}"
+            with grpc.insecure_channel(address) as channel:
+                stub = federated_pb2_grpc.FederatedNodeStub(channel)
+                req = federated_pb2.NodeInfo(node_id=node['id'], ip_address=node['ip'], port=node['port'])
+                resp = stub.Ping(req, timeout=2)
+                return resp.success
+        except Exception:
+            time.sleep(1)
+    return False
