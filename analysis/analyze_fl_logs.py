@@ -52,7 +52,7 @@ def parse_single_file(filepath):
         re.findall(r'Registration success:\s*Node\s*(\d+)', full_text, re.IGNORECASE) or
         re.findall(r'Respawned node registration success:\s*Node\s*(\d+)', full_text, re.IGNORECASE) or
         re.findall(r'Node\s+(\d+)\s+successfully\s+(?:registered|unregistered)', full_text, re.IGNORECASE) or
-        re.findall(r'\[Init\]\s*Nodo ID:\s*(\d+)', full_text, re.IGNORECASE)
+        re.findall(r'\[Init\]\s*Node ID:\s*(\d+)', full_text, re.IGNORECASE)
     )
     explicit_id = int(explicit_matches[0]) if explicit_matches else None
 

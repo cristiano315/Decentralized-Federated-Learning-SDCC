@@ -22,7 +22,7 @@ print(f"Found {len(grouped)} distinct log streams in the file.")
 for stream_name, group in grouped:
     full_text = " ".join(group['message'].astype(str))
 
-    # Match the explicit Node ID using updated and legacy signatures[cite: 1, 2, 3]
+    # Match the explicit Node ID using updated and legacy signatures
     match = (
         re.search(r'Init:\s*Node\s*ID:\s*(\d+)', full_text, re.IGNORECASE) or
         re.search(r'Client\s*(\d+):', full_text) or
