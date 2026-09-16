@@ -62,6 +62,7 @@ Per lanciare il sistema decentralizzato andare in "federated_cluster" ed utilizz
 * NUM_EPOCS per cambiare il numero di epoche in un round.
 * TOTAL_ROUNDS per il numero di round. Alla fine di ogni round avverrà lo scambio dei pesi. Concluso l'ultimo round l'addestramento termina.
 * TRAINING_NODES per il numero di nodi coinvolti nell' addestramento.
-* NUM_PEERS_REQUIRED numero minimo di pesi provenienti da altri nodi nodi che un client deve ricevere necessari per terminare il round. Dovrebbe essere impostato a TRAINING_NODES - 1.
+* NUM_PEERS_REQUIRED  numero minimo di peers per avviare il training. Può essere impostato al più a TRAINING_NODES - 1.
+* WEIGHT_WAIT_TIMEOUT_SECONDS per impostare il tempo massimo di attesa per la ricezione dei pesi.
 
 Per il sistema centralizzato il procedimento è analogo. Utilizzare il servizio "centralized-registry-service" in "centralized-cluster" per tenere attiva un'istanza di "registry_server_task_centralized". Infine lanciare una "coordinator_task" (STARTER non è presente in quanto il coordinatore avvia sempre il processo) con le variabili d'ambiente desiderate.
