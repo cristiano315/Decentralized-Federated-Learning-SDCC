@@ -56,6 +56,7 @@ class FederatedNodeServicer(federated_pb2_grpc.FederatedNodeServicer):
             'num_epochs': request.num_epochs,
             'peers': peers_list
         }
+        self.active_config = self.pending_training_config  # Store the active config to send to respawned nodes if needed
         
         # Unlock main thread to start training
         self.start_training_event.set()
@@ -195,7 +196,7 @@ class FederatedNodeServicer(federated_pb2_grpc.FederatedNodeServicer):
         print(f"Peer {request.node_id} marked as unresponsive. Updated local peer list.")
 
         # If STARTER node, send config
-        if self.is_starter and self.active_config is not None:
+        if self.active_config is not None:
             print(f"Sending configuration to respawned node {request.node_id}...")
 
             with self.lock:
