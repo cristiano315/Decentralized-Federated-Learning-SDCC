@@ -89,7 +89,7 @@ class FederatedCoordinator:
         retries = 0
         num_peers_required = self.config['training_nodes']
         max_retries = self.config['max_discovery_retries']
-        bucket_name = "sdcc-dataset-264452429750-us-east-1-an"
+        bucket_name = "sdcc-dataset-486263311703-us-east-1-an"
         s3_key = "all_data_niid_05_keep_3_train_9.json"
         while len(active_nodes) < num_peers_required:
             if retries >= max_retries:
