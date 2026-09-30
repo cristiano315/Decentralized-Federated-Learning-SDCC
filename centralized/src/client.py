@@ -42,7 +42,7 @@ def run_training_loop(config, global_model, servicer, MY_ID, device, RESPAWNED):
     num_epochs = config['num_epochs']
     
     # prepare dataset
-    bucket_name = "sdcc-dataset-264452429750-us-east-1-an"
+    bucket_name = "sdcc-dataset-486263311703-us-east-1-an"
     s3_key = "all_data_niid_05_keep_3_train_9.json"
     X_train, Mask_train, Y_train, X_val, Mask_val, Y_val, X_test, Mask_test, Y_test = SentimentPyTorch.prepare_dataset(bucket_name, s3_key, num_samples, training_set_percentage, start_index, truncated_training_length, max_samples_per_client=1000, seed=42)
     my_samples = len(Y_train)
@@ -188,7 +188,7 @@ def main():
     MY_ID = str(os.getenv("CLIENT_ID", f"node_{random.randint(1000,9999)}"))
     MY_IP = get_ecs_container_ip()
     MY_PORT = int(os.getenv("PORT", 50051))
-    REGISTRY_ADDR = os.getenv("REGISTRY_ADRESS", "registry-nlb-ba1dc354920c500b.elb.us-east-1.amazonaws.com:8080")
+    REGISTRY_ADDR = os.getenv("REGISTRY_ADRESS", "registry-nlb-435c67b2a29ff889.elb.us-east-1.amazonaws.com:8080")
     RESPAWNED = os.getenv("RESPAWNED", "false").lower() == "true"
     
     # start gRPC server and registry client
