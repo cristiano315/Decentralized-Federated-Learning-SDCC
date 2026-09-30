@@ -482,7 +482,7 @@ func (s *registryServer) raiseRequiredNodes(required int) {
 			{Key: "NUM_EPOCHS", Value: "1"},
 		}
 
-		err := utils.LaunchTask("federated_cluster", "client_task", 1, "Main", env)
+		err := utils.LaunchTask("federated-cluster", "client_task", 1, "Main", env)
 		if err != nil {
 			fmt.Printf("AWS Error: %s\n", err.Error())
 		}
@@ -513,7 +513,7 @@ func (s *registryServer) raiseSpecificNode(id string, requiredNodes int, port in
 		{Key: "NUM_EPOCHS", Value: strconv.Itoa(numEpochs)},
 	}
 
-	err := utils.LaunchTask("federated_cluster", "client_task", 1, "Main", env)
+	err := utils.LaunchTask("federated-cluster", "client_task", 1, "Main", env)
 	if err != nil {
 		log.Printf("AWS Error launching respawned node %s: %v\n", id, err)
 		// If the launch fails, decrement pendingNodes to avoid deadlock in WaitIdleNodes
